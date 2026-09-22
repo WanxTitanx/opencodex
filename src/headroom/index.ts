@@ -14,6 +14,7 @@
  * directly. Endpoint shapes Headroom cannot compress fall through untouched.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import type { AdapterRequest } from "../adapters/base";
 import type { OcxConfig } from "../types";
 
@@ -180,6 +181,147 @@ export function resetHeadroomProbeForTests(): void {
   probeInFlight = undefined;
 }
 
+const HEADROOM_SAVINGS_TTL_MS = 5_000;
+const HEADROOM_SAVINGS_RETENTION_MS = 30 * 24 * 3600_000;
+
+let savingsCache: { report: unknown; checkedAt: number } | undefined;
+let savingsRunner: (() => Promise<unknown>) | undefined;
+
+interface HeadroomSavingsEvent {
+  ts?: string;
+  before?: number;
+  saved?: number;
+  cost_usd?: number;
+  model?: string;
+  client?: string;
+}
+
+interface SavingsBucket {
+  tokens_saved: number;
+  tokens_before: number;
+  cost_usd: number;
+  cost_effective_usd: number;
+  calls: number;
+  savings_percent: number;
+}
+
+function emptyBucket(): SavingsBucket {
+  return { tokens_saved: 0, tokens_before: 0, cost_usd: 0, cost_effective_usd: 0, calls: 0, savings_percent: 0 };
+}
+
+function addToBucket(bucket: SavingsBucket, event: HeadroomSavingsEvent): void {
+  bucket.tokens_saved += event.saved ?? 0;
+  bucket.tokens_before += event.before ?? 0;
+  bucket.cost_usd += event.cost_usd ?? 0;
+  bucket.calls += 1;
+}
+
+function finishBucket(bucket: SavingsBucket): SavingsBucket {
+  bucket.savings_percent = bucket.tokens_before > 0
+    ? Math.round((bucket.tokens_saved / bucket.tokens_before) * 1000) / 10
+    : 0;
+  bucket.cost_effective_usd = bucket.cost_usd;
+  return bucket;
+}
+
+function savingsLedgerPath(): string | undefined {
+  const override = process.env.HEADROOM_SAVINGS_EVENTS_PATH?.trim();
+  if (override) return override;
+  const home = process.env.HOME;
+  return home ? `${home}/.headroom/savings_events.jsonl` : undefined;
+}
+
+/**
+ * Aggregate the durable savings ledger the same way `headroom savings --json`
+ * does — the CLI takes ~9s (Python cold start), so the management route reads
+ * the append-only JSONL directly instead of spawning it per poll. Events older
+ * than the 30-day retention window are dropped on read, matching the CLI.
+ */
+function readSavingsLedgerReport(): unknown {
+  const path = savingsLedgerPath();
+  if (!path || !existsSync(path)) return undefined;
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch {
+    return undefined;
+  }
+  const now = Date.now();
+  const cutoff = now - HEADROOM_SAVINGS_RETENTION_MS;
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+
+  const lifetime = emptyBucket();
+  const today = emptyBucket();
+  const last7 = emptyBucket();
+  const last30 = emptyBucket();
+  const byModel = new Map<string, SavingsBucket>();
+  const byClient = new Map<string, SavingsBucket>();
+
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let event: HeadroomSavingsEvent;
+    try {
+      event = JSON.parse(line) as HeadroomSavingsEvent;
+    } catch {
+      continue;
+    }
+    const ts = Date.parse(event.ts ?? "");
+    if (Number.isNaN(ts) || ts < cutoff) continue;
+    addToBucket(lifetime, event);
+    if (ts >= startOfToday.getTime()) addToBucket(today, event);
+    if (ts >= now - 7 * 24 * 3600_000) addToBucket(last7, event);
+    addToBucket(last30, event);
+    const model = event.model || "unknown";
+    const client = event.client || "unknown";
+    addToBucket(byModel.get(model) ?? byModel.set(model, emptyBucket()).get(model)!, event);
+    addToBucket(byClient.get(client) ?? byClient.set(client, emptyBucket()).get(client)!, event);
+  }
+  if (lifetime.calls === 0) return undefined;
+
+  const rank = <K extends "model" | "client">(map: Map<string, SavingsBucket>, key: K): Array<Record<K, string> & SavingsBucket> =>
+    [...map.entries()]
+      .map(([name, bucket]) => ({ [key]: name, ...finishBucket(bucket) }) as Record<K, string> & SavingsBucket)
+      .sort((a, b) => b.cost_usd - a.cost_usd);
+  const by_model = rank(byModel, "model");
+  const by_client = rank(byClient, "client");
+
+  return {
+    schema_version: 2,
+    path,
+    top_model: by_model[0]?.model,
+    lifetime: finishBucket(lifetime),
+    windows: {
+      today: finishBucket(today),
+      last_7_days: finishBucket(last7),
+      last_30_days: finishBucket(last30),
+    },
+    by_model,
+    by_client,
+  };
+}
+
+/**
+ * The durable savings ledger report. Unlike `/stats` it reads
+ * `~/.headroom/savings_events.jsonl`, so it answers even while the sidecar is
+ * down. Cached briefly because the dashboard polls.
+ */
+export async function headroomSavingsReport(): Promise<unknown> {
+  const now = Date.now();
+  if (savingsCache && now - savingsCache.checkedAt < HEADROOM_SAVINGS_TTL_MS) {
+    return savingsCache.report;
+  }
+  const report = await (savingsRunner ?? (async () => readSavingsLedgerReport()))();
+  savingsCache = { report, checkedAt: Date.now() };
+  return report;
+}
+
+/** Test seam: replace the ledger runner and clear the TTL cache. */
+export function setHeadroomSavingsRunnerForTests(runner: (() => Promise<unknown>) | undefined): void {
+  savingsRunner = runner;
+  savingsCache = undefined;
+}
+
 /**
  * Redirect a serialized upstream request through the local Headroom proxy.
  * Returns true when the request now points at Headroom. Fail-open on every
@@ -221,6 +363,7 @@ export async function headroomStatus(config: Pick<OcxConfig, "headroom">): Promi
   baseUrl: string;
   reachable: boolean;
   stats: unknown;
+  savings: unknown;
 }> {
   const headroom = resolveHeadroomConfig(config);
   // A management read bypasses the probe cache so the toggle reflects now, not
@@ -234,5 +377,8 @@ export async function headroomStatus(config: Pick<OcxConfig, "headroom">): Promi
     probeCache = { baseUrl: headroom.baseUrl, ok: false, checkedAt: Date.now() };
   }
   const stats = reachable ? await fetchHeadroomJson(headroom.baseUrl, "/stats") : undefined;
-  return { enabled: headroom.enabled, baseUrl: headroom.baseUrl, reachable, stats };
+  // The savings ledger is durable and file-based, so it is read even while the
+  // sidecar itself is down.
+  const savings = await headroomSavingsReport();
+  return { enabled: headroom.enabled, baseUrl: headroom.baseUrl, reachable, stats, savings };
 }

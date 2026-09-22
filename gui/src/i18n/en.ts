@@ -3146,6 +3146,23 @@ export const en = {
   "headroom.metrics.avgCompression": "Avg compression",
   "headroom.metrics.costSaved": "Cost saved",
   "headroom.metrics.savingsPct": "Savings",
+  "headroom.metrics.primaryModel": "Primary model",
+  "headroom.metrics.prefixFrozen": "Prefix-frozen requests",
+  "headroom.metrics.wsSaved": "Codex WS tokens saved",
+  "headroom.metrics.cacheDiscount": "Provider cache discount",
+  "headroom.metrics.compressionSaved": "Compression savings",
+  "headroom.metrics.cacheSaved": "Cache savings",
+  "headroom.metrics.usageTotals": "{requests} logged requests · {saved} tokens saved · {pct}% across agents",
+  "headroom.savings.title": "Durable savings",
+  "headroom.savings.unavailable": "No savings ledger data yet — compressions append to ~/.headroom/savings_events.jsonl.",
+  "headroom.savings.lifetime": "Lifetime",
+  "headroom.savings.today": "Today",
+  "headroom.savings.last7": "Last 7 days",
+  "headroom.savings.last30": "Last 30 days",
+  "headroom.savings.savedTokens": "{saved} / {before} tokens",
+  "headroom.savings.calls": "{count} calls",
+  "headroom.savings.byModel": "Cost avoided per model",
+  "headroom.savings.byClient": "Savings by client",
 } as const;
 
 export type TKey = keyof typeof en;

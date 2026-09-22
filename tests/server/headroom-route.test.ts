@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Server } from "bun";
 import type { AdapterRequest } from "../../src/adapters/base";
 import type { OcxConfig } from "../../src/types";
 import {
   applyHeadroomRoute,
   headroomRouteForUpstream,
+  headroomSavingsReport,
   HEADROOM_DEFAULT_BASE_URL,
   resetHeadroomProbeForTests,
+  setHeadroomSavingsRunnerForTests,
 } from "../../src/headroom";
 
 const HEADROOM = "http://127.0.0.1:8787";
@@ -130,5 +135,63 @@ describe("applyHeadroomRoute", () => {
   test("defaults to the loopback base url", () => {
     const resolved = headroomRouteForUpstream("https://api.openai.com/v1/responses", HEADROOM_DEFAULT_BASE_URL);
     expect(resolved?.url).toBe(`${HEADROOM_DEFAULT_BASE_URL}/v1/responses`);
+  });
+});
+
+describe("headroomSavingsReport", () => {
+  afterEach(() => setHeadroomSavingsRunnerForTests(undefined));
+
+  test("forwards the parsed CLI report and caches it inside the TTL", async () => {
+    let calls = 0;
+    setHeadroomSavingsRunnerForTests(async () => {
+      calls += 1;
+      return { lifetime: { tokens_saved: 42 } };
+    });
+    expect(await headroomSavingsReport()).toEqual({ lifetime: { tokens_saved: 42 } });
+    expect(await headroomSavingsReport()).toEqual({ lifetime: { tokens_saved: 42 } });
+    expect(calls).toBe(1);
+  });
+
+  test("a missing CLI or a failed run surfaces as undefined, never a throw", async () => {
+    setHeadroomSavingsRunnerForTests(async () => undefined);
+    expect(await headroomSavingsReport()).toBeUndefined();
+  });
+
+  test("aggregates the real ledger with the CLI's windows and groupings", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-headroom-savings-"));
+    const path = join(dir, "savings_events.jsonl");
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const now = Date.now();
+    writeFileSync(path, [
+      JSON.stringify({ v: 1, ts: iso(now - 600), before: 100, after: 60, saved: 40, cost_usd: 0.4, model: "m-a", client: "codex" }),
+      JSON.stringify({ v: 1, ts: iso(now - 120), before: 60, after: 50, saved: 10, cost_usd: 0.1, model: "m-b", client: "proxy" }),
+      // Outside the 30-day retention window — must be pruned on read like the CLI.
+      JSON.stringify({ v: 1, ts: iso(now - 31 * 24 * 3600_000), before: 999, after: 1, saved: 998, cost_usd: 9.99, model: "old", client: "codex" }),
+      "not json",
+      "",
+    ].join("\n"));
+    const prev = process.env.HEADROOM_SAVINGS_EVENTS_PATH;
+    process.env.HEADROOM_SAVINGS_EVENTS_PATH = path;
+    try {
+      setHeadroomSavingsRunnerForTests(undefined);
+      const report = await headroomSavingsReport() as {
+        lifetime: { tokens_saved: number; calls: number; savings_percent: number };
+        windows: { today: { calls: number }; last_7_days: { calls: number }; last_30_days: { calls: number } };
+        by_model: Array<{ model: string }>;
+        top_model: string;
+      };
+      expect(report.lifetime.calls).toBe(2);
+      expect(report.lifetime.tokens_saved).toBe(50);
+      expect(report.lifetime.savings_percent).toBeCloseTo(31.3, 1);
+      expect(report.windows.today.calls).toBe(2);
+      expect(report.windows.last_7_days.calls).toBe(2);
+      expect(report.windows.last_30_days.calls).toBe(2);
+      expect(report.top_model).toBe("m-a");
+      expect(report.by_model.map(m => m.model)).toEqual(["m-a", "m-b"]);
+    } finally {
+      if (prev === undefined) delete process.env.HEADROOM_SAVINGS_EVENTS_PATH;
+      else process.env.HEADROOM_SAVINGS_EVENTS_PATH = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

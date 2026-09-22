@@ -88,7 +88,10 @@ credentials flow inside the request and Headroom needs none of its own. A cached
 `/livez` probe keeps the redirect fail-open: an unreachable sidecar leaves the request
 aimed at the provider origin. Private/loopback upstreams and endpoint shapes Headroom
 cannot compress are never redirected. `/api/headroom` on the management plane exposes
-the toggle, base URL, liveness, and the sidecar's own `/stats` metrics.
+the toggle, base URL, liveness, the sidecar's own `/stats` metrics, and the durable
+savings ledger aggregated from `~/.headroom/savings_events.jsonl` — read in-process
+because the `headroom savings` CLI costs seconds per invocation while the dashboard
+polls.
 
 ### Grok snapshot module ownership
 
