@@ -94,6 +94,24 @@ export interface HandleResponsesOptions {
    * it. Omitted means a genuine Responses inbound.
    */
   inboundWire?: InboundWire;
+  /**
+   * Anthropic inbound only: the client's ORIGINAL Messages body, before translation.
+   * The anthropic OAuth path rebuilds the upstream request from it so genuine
+   * Claude Code bodies keep their system/tool/field shape (dario parity).
+   */
+  anthropicSourceBody?: unknown;
+  /**
+   * Anthropic inbound only: the client's own CC-identity headers, pre-filtered to
+   * the forwardable set (src/claude/cc-fingerprint.ts). Forwarded verbatim on the
+   * genuine-CC path — the client is the authentic article.
+   */
+  anthropicClientHeaders?: Record<string, string>;
+  /**
+   * Anthropic inbound only: the client's raw `anthropic-beta` header. Merge input
+   * for the computed Claude Code beta set — never forwarded verbatim (dario merges
+   * client betas AFTER the computed set, deduped).
+   */
+  anthropicClientBeta?: string;
   /** Internal transport identity for route-scoped upstream compatibility policy. */
   inboundTransport?: "websocket";
   /**

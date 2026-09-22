@@ -229,6 +229,10 @@ const RECOVERY_KIND_CAUSE = {
   "opaque-blob-rejection": "ciphertext-refusal",
   "empty-completion": "empty-output",
   "reasoning-effort-downgrade": "parameter-rejected",
+  // The subscription-fingerprint 400s (beta flag, effort rung, max_tokens cap,
+  // long context) are all "the upstream refused this parameter for this
+  // account/model" — same cause family as the effort downgrade.
+  "anthropic-beta-400": "parameter-rejected",
 } as const satisfies Record<AttemptRecoveryKind, RequestFailureCause>;
 
 export function causeForRecoveryKind(kind: AttemptRecoveryKind): RequestFailureCause {

@@ -1666,7 +1666,10 @@
     "platform-dialog-guard.test.ts": "gui",
     "api-key-catalog-authority.test.ts": "providers",
     "release-resume-identity.test.ts": "ci-workflows",
-    "update-bun-ownership-lease.test.ts": "update"
+    "update-bun-ownership-lease.test.ts": "update",
+    "claude-account-import.test.ts": "oauth",
+    "claude-cc-fingerprint.test.ts": "claude-integration",
+    "headroom-route.test.ts": "server"
   },
   "migrated": [
     "adapters",

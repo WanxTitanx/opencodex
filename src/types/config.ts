@@ -435,6 +435,17 @@ export interface OcxConfig {
   privacy?: OcxPrivacyConfig;
   /** Opt-in process-local aggregate request metrics on the authenticated management plane. */
   metricsExport?: { enabled?: boolean };
+  /**
+   * Opt-in routing of compressible upstream traffic through a local Headroom
+   * proxy (`src/headroom/`). The sidecar compresses the conversation and
+   * forwards to the provider origin named by the per-request
+   * `x-headroom-base-url` header, so it holds no credentials of its own.
+   * Default off; default base URL is `http://127.0.0.1:8787`.
+   */
+  headroom?: {
+    enabled?: boolean;
+    baseUrl?: string;
+  };
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
   emptyCompletionRetry?: boolean;
   /** Suppress allowlisted client-facing Codex transport hints; provider enforcement is unchanged. */

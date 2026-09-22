@@ -83,6 +83,7 @@ badge or the version value to read the full value.
 | **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |
 | **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
+| **Headroom** | Enable or disable the Headroom compression sidecar redirect, set its base URL, and read reachability plus the sidecar's compression metrics (requests, tokens saved, savings percent). When enabled, compressible upstream sends go through the Headroom listener; unreachable or unsupported routes fall back to direct provider dispatch. |
 | **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. |
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |

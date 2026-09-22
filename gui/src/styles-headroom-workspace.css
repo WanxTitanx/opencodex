@@ -1,0 +1,6 @@
+.headroom-page { display: grid; gap: 14px; align-content: start; }
+.headroom-page .panel { padding: 14px; display: grid; gap: 10px; align-content: start; }
+.headroom-controls { display: flex; align-items: center; gap: 10px; }
+.headroom-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.headroom-metric { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.headroom-metric strong { font-size: var(--text-section); }

@@ -75,6 +75,21 @@ owns credential selection; API-key OpenAI is not a ChatGPT forward sidecar candi
 
 Sidecar failures must degrade to text markers or skipped capability, not abort the main request.
 
+### Headroom compression sidecar
+
+`src/headroom/` is a different sidecar shape: not a model authority but a local proxy
+(default `http://127.0.0.1:8787`) that compresses the serialized upstream request and
+forwards it itself. When `config.headroom.enabled` is set, each built `AdapterRequest`
+whose upstream path maps to a Headroom endpoint (`/v1/responses`, `/v1/chat/completions`,
+`/v1/messages`, the Gemini `/v1beta/models/*` generate routes, or a native
+`/backend-api/*` ChatGPT path) is re-pointed at the sidecar with
+`x-headroom-base-url`/`x-headroom-original-path` carrying the real destination, so
+credentials flow inside the request and Headroom needs none of its own. A cached
+`/livez` probe keeps the redirect fail-open: an unreachable sidecar leaves the request
+aimed at the provider origin. Private/loopback upstreams and endpoint shapes Headroom
+cannot compress are never redirected. `/api/headroom` on the management plane exposes
+the toggle, base URL, liveness, and the sidecar's own `/stats` metrics.
+
 ### Grok snapshot module ownership
 
 The client-specific tracker lives in `grok-responses-snapshot-repair.ts`; the

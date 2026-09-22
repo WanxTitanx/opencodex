@@ -340,6 +340,7 @@ const RECOVERY_KIND_KEYS = {
   "console-go-upload-retry": "logs.detail.attempt.recovery.consoleGoUpload",
   "opaque-blob-rejection": "logs.detail.attempt.recovery.opaqueBlobRejection",
   "reasoning-effort-downgrade": "logs.detail.attempt.recovery.reasoningEffortDowngrade",
+  "anthropic-beta-400": "logs.detail.attempt.recovery.anthropicBeta400",
 } as const satisfies Record<AttemptRecoveryKind, string>;
 
 /** Map a metric-unavailable reason to its i18n key. */

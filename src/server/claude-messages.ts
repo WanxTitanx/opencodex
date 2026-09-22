@@ -23,6 +23,7 @@ import { resolveAlias, claudeCodeNativeAlias } from "../claude/alias";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
+import { forwardClaudeClientIdentityHeaders } from "../claude/cc-fingerprint";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
 import {
   applyReplayRefusalClientHeaders,
@@ -971,6 +972,12 @@ async function handleClaudeMessagesWithBudget(
     // Without this the replay would look native and a Responses-scoped wire default
     // would fire, disagreeing with the pre-flight decision above.
     inboundWire: "anthropic",
+    // The pre-translation body + the client's own CC-identity headers: the anthropic
+    // OAuth path rebuilds upstream requests from the genuine body rather than from
+    // the round-tripped internal shape (dario parity for billing/fingerprint).
+    anthropicSourceBody: anthropicBody,
+    anthropicClientHeaders: forwardClaudeClientIdentityHeaders(req.headers),
+    anthropicClientBeta: req.headers.get("anthropic-beta") ?? undefined,
     claudeGoAffinity: { sessionLane: claudeGoSessionLane },
     claudeNativeSessionId,
     stripClaudeMainAuthForNoncanonicalForward: true,

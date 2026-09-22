@@ -17,6 +17,7 @@ import {
   resetUpstreamHostHealth,
 } from "../../codex/upstream-host-health";
 import { safeOriginLabel, fetchWithHeaderTimeout, providerFetch } from "./fetch-helpers";
+import { applyHeadroomRoute } from "../../headroom";
 import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
 import { formatErrorResponse } from "../../bridge";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
@@ -720,6 +721,7 @@ export async function retryCodexPoolOnAlternateAccount(
     headers: retryHeaders,
     translatorBudget: options.translatorBudget,
   });
+  await applyHeadroomRoute(request, config);
   recordAdapterReasoning(logCtx, request);
   recordAdapterTier(logCtx, request);
 

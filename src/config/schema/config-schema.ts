@@ -77,6 +77,12 @@ export const configSchema = z.object({
   privacy: z.object({ maskEmails: z.boolean().optional() }).strict().optional().catch(undefined),
   // Malformed hand edits disable this opt-in exporter. Live writes reject them in diagnostics.ts.
   metricsExport: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
+  // Malformed hand edits disable the opt-in Headroom sidecar redirect; the
+  // request path then simply keeps sending to provider origins.
+  headroom: z.object({
+    enabled: z.boolean().optional().catch(false),
+    baseUrl: z.string().optional().catch(undefined),
+  }).strict().optional().catch(undefined),
   // A malformed present client block must remain diagnosable from raw config and
   // fail closed through src/client/state.ts; unrelated provider state still loads.
   client: clientConnectionSchema.optional().catch(undefined),

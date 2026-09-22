@@ -309,6 +309,15 @@ export async function prepareResponsesRequest(
   try {
     parsed = parseRequest(body);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
+    // Anthropic inbound carries its pre-translation body + CC-identity headers out of
+    // band; the OAuth path in the anthropic adapter rebuilds from them (dario parity).
+    if (options.inboundWire === "anthropic") {
+      if (options.anthropicSourceBody !== null && typeof options.anthropicSourceBody === "object") {
+        parsed._anthropicSourceBody = options.anthropicSourceBody as Record<string, unknown>;
+      }
+      if (options.anthropicClientHeaders) parsed._anthropicClientHeaders = options.anthropicClientHeaders;
+      if (options.anthropicClientBeta) parsed._anthropicClientBeta = options.anthropicClientBeta;
+    }
     // The body may have been rebuilt since the inbound observation (previous-response
     // expansion); alias the parsed raw body to the same draft so the outbound
     // observation at the adapter seam still finds it.

@@ -11,9 +11,10 @@ import CodexSet from "./pages/CodexSet";
 import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import RemoteWorkspace from "./pages/RemoteWorkspace";
+import Headroom from "./pages/Headroom";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh, IconFilter} from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Select, ToastNotice, type NoticeTone } from "./ui";
 import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
@@ -39,6 +40,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
   usage: "nav.usage",
   storage: "nav.storage",
   remote: "nav.remote",
+  headroom: "nav.headroom",
   "codex-set": "nav.codexSet",
   integrations: "nav.integrations",
 };
@@ -73,6 +75,7 @@ const NAV: NavEntry[] = [
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
   { id: "remote", tkey: "nav.remote", Icon: IconMonitor },
+  { id: "headroom", tkey: "nav.headroom", Icon: IconFilter },
   { id: "integrations", tkey: "nav.integrations", Icon: IconGlobe },
 ];
 
@@ -509,6 +512,7 @@ export default function App() {
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />}
                 {page === "storage" && <Storage apiBase={sharedBase} />}
                 {page === "remote" && <RemoteWorkspace apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} />}
+                {page === "headroom" && <Headroom apiBase={sharedBase} />}
                 {page === "codex-set" && <CodexSet apiBase={sharedBase} />}
                 {page === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
               </>

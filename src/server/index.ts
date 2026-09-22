@@ -854,6 +854,14 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       .catch(() => {});
   }
 
+  // Adopt the machine's Claude Code login into the anthropic OAuth account set so a
+  // routed Claude request resolves on the first turn instead of waiting for the lazy
+  // per-request import. Fire-and-forget like the quota priming above: never blocks the
+  // listener, and a missing/unreadable local credential silently no-ops.
+  import("../oauth/anthropic-import")
+    .then(({ ensureAnthropicAccountImported }) => ensureAnthropicAccountImported(config))
+    .catch(() => {});
+
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
   backgroundLifecycle.scheduleStartupRun();
 

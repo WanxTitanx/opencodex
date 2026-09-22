@@ -27,6 +27,7 @@ import {
   publicOAuthAuthenticationErrorMessage,
   UnsupportedOAuthProviderError,
 } from "../../oauth";
+import { ensureAnthropicAccountImported } from "../../oauth/anthropic-import";
 import {
   forgetGenericFailoverRoster,
   isGenericFailoverProvider,
@@ -103,6 +104,19 @@ export async function prepareResponsesTransport(
   let genericFailovers = 0;
   let oauthSelection = route.provider.authMode === "oauth"
     ? captureOAuthAccountSelection(route.providerName) : null;
+  /**
+   * Stamp the serving account's Claude Code identity onto the parsed request — the
+   * adapter's OAuth path carries it into `metadata.user_id` and the session/beta
+   * caches. One helper so the initial resolution and every account rotation agree.
+   */
+  const stampAnthropicIdentity = (snapshot: OAuthAccessSnapshot): void => {
+    parsed._anthropicIdentity = {
+      accountId: snapshot.accountId,
+      ...(snapshot.anthropic?.deviceId ? { deviceId: snapshot.anthropic.deviceId } : {}),
+      ...(snapshot.anthropic?.accountUuid ? { accountUuid: snapshot.anthropic.accountUuid } : {}),
+      ...(snapshot.anthropic?.sessionId ? { sessionSeed: snapshot.anthropic.sessionId } : {}),
+    };
+  };
   let servingOAuthSnapshot: OAuthAccessSnapshot | undefined;
   // These owners also serve early passthrough and sidecar sends. A dispatch-time
   // rebuild must update every later builder, without entering a later block's TDZ.
@@ -239,6 +253,7 @@ export async function prepareResponsesTransport(
     stampOAuthAccountLabel(logCtx, route.providerName, route.provider, snapshot.accountId);
     if (route.providerName === "anthropic") {
       anthropicPoolAccountId = snapshot.accountId;
+      stampAnthropicIdentity(snapshot);
       logCtx.provider = formatAnthropicProviderForLog("anthropic", snapshot.accountId, config);
     } else {
       genericFailoverAccountId = snapshot.accountId;
@@ -487,6 +502,12 @@ export async function prepareResponsesTransport(
     })
     : null;
   if (route.provider.authMode === "oauth") {
+    // Lazy local import (dario loadCredentials): a machine with a signed-in Claude
+    // Code needs no re-auth — adopt its credential when the store has no usable
+    // anthropic account, then re-capture the selection the import just changed.
+    if (route.providerName === "anthropic" && await ensureAnthropicAccountImported(config)) {
+      oauthSelection = captureOAuthAccountSelection(route.providerName);
+    }
     try {
       if (route.providerName === "anthropic" && isAnthropicAccountPoolEnabled(config)) {
         const selection = resolveAnthropicAccountForSession(anthropicSessionKey, config);
@@ -505,6 +526,7 @@ export async function prepareResponsesTransport(
         const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(selection.accountId), true, selection.reason);
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         anthropicPoolAccountId = admitted.accountId;
+        stampAnthropicIdentity(admitted);
         route.provider = { ...route.provider, apiKey: admitted.accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
       } else {
@@ -583,6 +605,7 @@ export async function prepareResponsesTransport(
         // dropped whenever the pool flag is off, and a later 429 has no account to cool. Reactive
         // failover needs only the id: no affinity bind, no promotion, no quota-ranked pick. Those
         // are proactive and stay behind anthropicAccountPool.enabled.
+        if (route.providerName === "anthropic") stampAnthropicIdentity(resolved);
         if (route.providerName === "anthropic" && hasAnthropicFailoverQuorum()) {
           anthropicPoolAccountId = resolved.accountId;
         }

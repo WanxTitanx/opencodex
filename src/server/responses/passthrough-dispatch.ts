@@ -52,6 +52,7 @@ import type { RoutedNamespaceToolAliases } from "../../responses/namespace-tool-
 import { hasResponsesSnapshotRepair, repairResponsesSnapshotJson } from "../responses-snapshot-repair";
 import { backfillResponsesFieldsJson } from "./responses-field-backfill";
 import type { AdapterRequest } from "../../adapters/base";
+import { applyHeadroomRoute } from "../../headroom";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { CODE_MODE_EXEC_TOOL_NAME } from "../../types";
 import type { ResponsesTerminalStatus } from "../../bridge";
@@ -320,6 +321,7 @@ export async function preparePassthroughExchange(
     let request: Awaited<ReturnType<typeof transportState.adapter.buildRequest>>;
     try {
       request = await transportState.adapter.buildRequest(parsed, { headers: requestState.selectedForwardHeaders, translatorBudget });
+      await applyHeadroomRoute(request, config);
     } catch (error) {
       releaseCodexAuthContextProbeLease(admissionState.authCtx);
       // A tool catalog this proxy cannot lower onto one wire namespace is a client input error, and
@@ -930,6 +932,7 @@ export async function preparePassthroughExchange(
             headers: requestState.selectedForwardHeaders,
             translatorBudget,
           });
+          await applyHeadroomRoute(request, config);
         }
         refreshRequestToolAliases(request);
         recordAdapterReasoning(logCtx, request);
@@ -1067,6 +1070,7 @@ export async function preparePassthroughExchange(
           headers: requestState.selectedForwardHeaders,
           translatorBudget,
         });
+        await applyHeadroomRoute(request, config);
         refreshRequestToolAliases(request);
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
@@ -1211,6 +1215,7 @@ export async function preparePassthroughExchange(
           headers: requestState.selectedForwardHeaders,
           translatorBudget,
         });
+        await applyHeadroomRoute(request, config);
         refreshRequestToolAliases(request);
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);

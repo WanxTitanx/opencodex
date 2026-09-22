@@ -676,6 +676,27 @@ Remote `https:` images and failed or empty descriptions are not cached.
 Anthropic OAuth sidecars reuse opencodex's existing Claude Code OAuth fingerprint. Soak-test the
 intended account and workload.
 
+### `headroom` (`OcxHeadroomConfig`)
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `enabled?` | `boolean` | `false` | Master switch for the Headroom sidecar redirect. |
+| `baseUrl?` | `string` | `http://127.0.0.1:8787` | Base URL of a locally running Headroom proxy. Must be an `http:` or `https:` URL; writes through the management API are validated and normalized to origin plus path. |
+
+When enabled, opencodex rewrites compressible upstream requests — OpenAI Responses and Chat
+Completions, Anthropic Messages, and Gemini `generateContent` — to the Headroom listener instead of
+the provider origin, passing the original destination in `x-headroom-base-url` and the original path
+in `x-headroom-original-path`. Headroom compresses the request, forwards it upstream, and records
+token savings itself; opencodex keeps owning provider credentials and routing. Requests on
+unsupported paths, WebSocket upgrades, and any send attempted while Headroom is unreachable go
+directly to the provider — the integration fails open and never blocks a turn. Headroom reports
+per-response savings in `x-headroom-tokens-before` / `x-headroom-tokens-after` /
+`x-headroom-tokens-saved` headers.
+
+Headroom is expected on loopback and requires no provider credentials of its own for this mode. The
+Dashboard **Headroom** page toggles the switch, edits `baseUrl`, and shows reachability plus the
+sidecar's compression metrics; `GET /api/headroom` and `PUT /api/headroom` expose the same state.
+
 ## Remote Hub keys and defaults
 
 `runtimeRole` defaults to `standalone`. A hub uses `hub.managementPublicOrigin`, loopback-only `hub.managementIngress` (`enabled:false` when absent), and exact `remoteGui.allowedTailscaleUsers` (empty when absent). A client data key lives in `service-api-token`, never `config.json`; rotation may temporarily create `service-api-token.prev`. Usage stores are not mirrored.

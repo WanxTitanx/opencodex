@@ -15,7 +15,30 @@ import type {
   OcxUsage,
 } from "../types";
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
-import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
+import { applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
+import {
+  applyClaudeCapabilityClamps,
+  buildClaudeBillingTag,
+  buildSynthesizedClaudeBody,
+  claudeBetaForModel,
+  claudeStaticHeaders,
+  detectClaudeCliVersion,
+  effectiveClaudeCacheControl,
+  extractClaudeClientSystemText,
+  hasClaudeCchSeed,
+  isClaudeContext1mUnavailable,
+  isGenuineClaudeCodeBody,
+  mergeClaudeClientBeta,
+  orderClaudeHeaders,
+  resolveClaudeSessionId,
+  rewriteGenuineClaudeBody,
+  stampClaudeCch,
+  stripClaudeContext1mTag,
+  stripRejectedClaudeBetas,
+  withClaudeCacheTtlBeta,
+  CLAUDE_DEFAULT_MAX_TOKENS,
+} from "../claude/cc-fingerprint";
+import { createHash, randomUUID } from "node:crypto";
 import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
@@ -23,7 +46,6 @@ import { normalizeAnthropicOutputSchema } from "./anthropic-output-schema";
 import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
-import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
@@ -939,6 +961,178 @@ function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown>
   return normalized;
 }
 
+// ── Claude Code subscription (OAuth) request path — dario parity ──
+// Everything in this block exists to make the upstream request indistinguishable
+// from first-party Claude Code traffic so it bills against the subscription, not
+// the API meter: billing-tag system block, agent identity, the captured CC system
+// prompt, the model-conditional beta set, CC's header set/order, metadata.user_id,
+// and CC's cache-breakpoint placement. See src/claude/cc-fingerprint.ts for the
+// primitives and the per-behavior dario references.
+
+/** Stable per-account identity when the credential predates the anthropic metadata
+ *  fields — derived, not random, so one account keeps ONE device/account pair across
+ *  restarts without a store write from the request path (dario mints at login). */
+function deriveClaudeIdentityField(kind: "device" | "account", accountKey: string): string {
+  const h = createHash("sha256").update(`ocx-anthropic-${kind}:${accountKey}`).digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
+/** Map the internal reasoning knob onto the wire effort vocabulary dario forwards. */
+function claudeEffortFromReasoning(reasoning: string | undefined): string | undefined {
+  if (reasoning === undefined || reasoning === "none") return reasoning === "none" ? "low" : undefined;
+  const mapped = adaptiveEffort(reasoning);
+  return mapped === "none" ? "low" : mapped;
+}
+
+/**
+ * Build the upstream request for an `authMode: "oauth"` anthropic provider.
+ * Two body paths, both ending in the same header/beta/metadata stamping:
+ *
+ *  - genuine Claude Code body (billing-tag + CC-origin system blocks): rewritten
+ *    byte-faithfully — client's own tools/system/order kept, only the billing tag,
+ *    metadata.user_id and cache breakpoints are replaced (dario genuine branch);
+ *  - anything else: the synthesized CC body (template system + client content).
+ */
+async function buildClaudeSubscriptionRequest(
+  parsed: OcxParsedRequest,
+  provider: OcxProviderConfig,
+  incoming: IncomingMeta | undefined,
+  toolNames: ReturnType<typeof buildToolNameTransforms>,
+): Promise<{ url: string; method: string; headers: Record<string, string>; body: string }> {
+  const url = anthropicMessagesUrl(provider.baseUrl);
+  const unresolvedPlaceholder = url.match(/\{[^}]*\}/)?.[0];
+  if (unresolvedPlaceholder) {
+    throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
+  }
+
+  const cliVersion = detectClaudeCliVersion();
+  const idIn = parsed._anthropicIdentity;
+  const accountKey = idIn?.accountId ?? "default";
+  const sessionId = resolveClaudeSessionId(accountKey, idIn?.sessionSeed);
+  const identity = {
+    deviceId: idIn?.deviceId ?? deriveClaudeIdentityField("device", accountKey),
+    accountUuid: idIn?.accountUuid ?? deriveClaudeIdentityField("account", accountKey),
+    sessionId,
+  };
+  const cch = hasClaudeCchSeed(cliVersion) ? randomUUID().replace(/-/g, "").slice(0, 5) : null;
+  const billingTag = buildClaudeBillingTag(cliVersion, cch);
+  const clientHeaders = parsed._anthropicClientHeaders ?? {};
+  const clientBeta = parsed._anthropicClientBeta;
+  const sourceBody = parsed._anthropicSourceBody;
+  const requestModel = parsed.modelId;
+  const wireModel = stripClaudeContext1mTag(requestModel);
+
+  // One cache-control decision feeds both the body stamps and the beta pairing:
+  // a client-requested ttl:"1h" requires the extended-cache-ttl flag on the wire
+  // or upstream ignores the ttl (the pair travels together on real CC).
+  const cacheControl = effectiveClaudeCacheControl(sourceBody ?? {}, clientBeta);
+  // Beta set: model-conditional base → client betas merged after → the ttl pair
+  // flag → account-rejected flags stripped (learned by the 400 recovery arm).
+  const skipContext1m = isClaudeContext1mUnavailable(accountKey);
+  let beta = claudeBetaForModel(requestModel, skipContext1m);
+  beta = mergeClaudeClientBeta(beta, clientBeta);
+  beta = withClaudeCacheTtlBeta(beta, cacheControl);
+  beta = stripRejectedClaudeBetas(beta, accountKey);
+
+  const configuredMaxOut = modelRecordValue(provider.modelMaxOutputTokens, wireModel)
+    ?? provider.defaultMaxOutputTokens;
+  const maxTokens = typeof configuredMaxOut === "number" && configuredMaxOut > 0
+    ? configuredMaxOut
+    : CLAUDE_DEFAULT_MAX_TOKENS;
+
+  let body: Record<string, unknown>;
+  const genuine = sourceBody !== undefined && isGenuineClaudeCodeBody(sourceBody);
+  if (genuine) {
+    body = rewriteGenuineClaudeBody(sourceBody, billingTag, cacheControl, identity);
+    body.model = wireModel;
+    // Routed turns always stream internally (the response layer folds for
+    // non-streaming clients); a genuine body's stream flag stays client-authored
+    // upstream, so pin it here like the synthesized branches do.
+    body.stream = parsed.stream;
+  } else if (sourceBody !== undefined) {
+    // Anthropic-native non-genuine client: synthesize from ITS body — messages,
+    // tools and system text are the client's own (dario preserveTools shape).
+    const messages = Array.isArray(sourceBody.messages) ? sourceBody.messages as Array<Record<string, unknown>> : [];
+    const clientOutputConfig = sourceBody.output_config as Record<string, unknown> | undefined;
+    body = buildSynthesizedClaudeBody({
+      model: wireModel,
+      messages,
+      clientSystemText: extractClaudeClientSystemText(sourceBody),
+      tools: Array.isArray(sourceBody.tools) ? sourceBody.tools as Array<Record<string, unknown>> : undefined,
+      maxTokens,
+      // The wire stream flag is the transport's internal decision (routed turns always
+      // stream and fold for non-streaming clients) — never the client's own preference.
+      stream: parsed.stream,
+      billingTag,
+      cacheControl,
+      identity,
+      clientEffort: clientOutputConfig?.effort,
+      clientThinking: sourceBody.thinking as Record<string, unknown> | undefined,
+    });
+    // The client's own structured-output contract rides on output_config.format
+    // (dario --preserve-output-format) — dropping it silently breaks strict parsers.
+    if (clientOutputConfig?.format !== undefined) {
+      const oc = body.output_config as Record<string, unknown> | undefined;
+      body.output_config = { ...(oc ?? {}), format: clientOutputConfig.format };
+    }
+  } else {
+    // Translated inbound (Responses/chat → anthropic OAuth): the converted
+    // Anthropic-shape parts get dressed in the CC template.
+    const { system, messages } = messagesToAnthropicFormat(parsed, toolNames);
+    if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
+    await normalizeAnthropicImages(messages, {
+      tierBias: incoming?.imageTierBias ?? 0,
+      abortSignal: incoming?.abortSignal,
+    });
+    enforceAnthropicImageLimits(messages);
+    const tools = toolsToAnthropicFormat(parsed, toolNames);
+    const clientEffort = claudeEffortFromReasoning(
+      parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId),
+    );
+    body = buildSynthesizedClaudeBody({
+      model: wireModel,
+      messages: messages as Array<Record<string, unknown>>,
+      clientSystemText: system,
+      tools: tools as Array<Record<string, unknown>> | undefined,
+      maxTokens,
+      stream: parsed.stream,
+      billingTag,
+      cacheControl,
+      identity,
+      clientEffort,
+    });
+    const textFormat = parsed.options.textFormat;
+    if (textFormat?.type === "json_schema" && textFormat.schema) {
+      const oc = body.output_config as Record<string, unknown> | undefined;
+      body.output_config = {
+        ...(oc ?? {}),
+        format: { type: "json_schema", schema: normalizeAnthropicOutputSchema(textFormat.schema) },
+      };
+    }
+  }
+
+  applyClaudeCapabilityClamps(body, wireModel);
+
+  const headers: Record<string, string> = {
+    ...claudeStaticHeaders(cliVersion),
+    // The genuine-CC client's own identity headers are the authentic article —
+    // forwarded over the template values (dario forwards on genuine/passthrough).
+    ...(genuine ? clientHeaders : {}),
+    "Authorization": `Bearer ${provider.apiKey}`,
+    "x-claude-code-session-id": sessionId,
+    "anthropic-version": "2023-06-01",
+    "anthropic-beta": beta,
+    // A genuine CC request already carries a real request id; synthesizing over
+    // it discards information for no gain (dario forwardedIdentity ?? randomUUID).
+    "x-client-request-id": clientHeaders["x-client-request-id"] ?? randomUUID(),
+    "x-stainless-timeout": clientHeaders["x-stainless-timeout"] ?? "600",
+  };
+  if (provider.headers) Object.assign(headers, provider.headers);
+
+  const serialized = stampClaudeCch(JSON.stringify(body), cliVersion);
+  return { url, method: "POST", headers: orderClaudeHeaders(headers), body: serialized };
+}
+
 export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long"): ProviderAdapter {
   const isOAuth = provider.authMode === "oauth";
   const toolNames = buildToolNameTransforms(provider);
@@ -953,6 +1147,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           throw new Error("anthropic oauth token missing — run ocx login anthropic");
         }
         throw new Error("anthropic provider requires a non-empty apiKey (authMode: key)");
+      }
+
+      if (isOAuth) {
+        return await buildClaudeSubscriptionRequest(parsed, provider, incoming, toolNames);
       }
 
       const { system, messages } = messagesToAnthropicFormat(parsed, toolNames);
@@ -985,13 +1183,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         stream: parsed.stream,
         max_tokens: parsed.options.maxOutputTokens ?? omittedMaxTokens,
       };
-      if (isOAuth) {
-        // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
-        body.system = [
-          { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
-          ...(system ? [{ type: "text", text: system }] : []),
-        ];
-      } else if (system) {
+      if (system) {
         body.system = [{ type: "text", text: system }];
       }
       if (tools) body.tools = tools;
@@ -1094,19 +1286,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         "Accept": parsed.stream ? "text/event-stream" : "application/json",
         "User-Agent": "@anthropic-ai/sdk/0.74.0",
       };
-      if (isOAuth) {
-        headers["Authorization"] = `Bearer ${provider.apiKey}`;
-        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
-        // Match the real Claude Code CLI request fingerprint: a valid OAuth token with an empty
-        // header set is a non-first-party signature. (cch billing-header signing is intentionally
-        // out of scope — brittle and version-coupled.)
-        Object.assign(headers, CLAUDE_CODE_HEADERS);
-        headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(provider.apiKey);
-        headers["x-client-request-id"] = crypto.randomUUID();
-      } else {
-        if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
-        else headers["x-api-key"] = provider.apiKey;
-      }
+      if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
+      else headers["x-api-key"] = provider.apiKey;
       if (provider.headers) Object.assign(headers, provider.headers);
 
       // Prompt caching: native Anthropic supports top-level automatic caching, which

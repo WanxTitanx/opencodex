@@ -283,6 +283,18 @@
       ]
     },
     {
+      "path": "providers/anthropic.md",
+      "tier": 4,
+      "title": "Anthropic Provider",
+      "scope": "Claude subscription OAuth fingerprint, local Claude Code credential import, and capability-rejection recovery.",
+      "documents": [
+        "src/adapters/",
+        "src/claude/",
+        "src/oauth/",
+        "src/server/"
+      ]
+    },
+    {
       "path": "providers/chat-compat.md",
       "tier": 4,
       "title": "Chat Provider Compatibility",
@@ -376,7 +388,8 @@
       "title": "Background Service And Sidecars",
       "scope": "Service install/repair, platform launchers, tray, and sidecar processes.",
       "documents": [
-        "src/server/"
+        "src/server/",
+        "src/headroom/"
       ]
     },
     {

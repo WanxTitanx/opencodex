@@ -37,6 +37,7 @@ import {
   sleepWithAbort,
 } from "../../lib/upstream-retry";
 import { describeUpstreamConnectFailure } from "./upstream-error";
+import { applyHeadroomRoute } from "../../headroom";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { OAuthAccessSnapshot } from "../../oauth";
@@ -81,6 +82,19 @@ import {
 } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { cancelBodyOnAbort } from "../../lib/abort";
+import { readBoundedResponseBody } from "../../lib/bounded-body";
+import {
+  isClaudeEffortParamUnsupported,
+  isClaudeLongContextRejection,
+  noteClaudeBetaRejection,
+  noteClaudeContext1mUnavailable,
+  noteClaudeEffortSupport,
+  noteClaudeMaxTokensCap,
+  parseClaudeBetaRejection,
+  parseClaudeEffortRejection,
+  parseClaudeMaxTokensRejection,
+  stripClaudeContext1mTag,
+} from "../../claude/cc-fingerprint";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
@@ -251,6 +265,7 @@ export async function prepareAdapterExchange(
       translatorBudget,
       abortSignal: upstream.signal,
     });
+    await applyHeadroomRoute(initialRequest, config);
     refreshRequestToolAliases(initialRequest);
     recordAdapterReasoning(logCtx, initialRequest);
     recordAdapterTier(logCtx, initialRequest);
@@ -376,6 +391,12 @@ export async function prepareAdapterExchange(
     // adapter, and imageTierBias — once armed — rides EVERY subsequent rebuild so a
     // 413→429 rotation cannot silently undo the tightening.
     let imageRetryAttempted = false;
+    // Anthropic-OAuth capability rejections (dario's recovery chain): a 400 can teach
+    // us a beta the account tier lacks, an effort rung or output cap the model does
+    // not have, or that long-context is unavailable. Each is parsed, cached, and
+    // retried via one rebuild — the rebuild re-reads the caches and emits the
+    // reduced shape. Bounded per request, mirroring MAX_RECOVERY_PASSES.
+    let anthropicCapability400Passes = 0;
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     // Console Go answers a transient 400 "Invalid upload request." for bodies it accepts
     // moments later; at most one byte-identical replay is allowed per request.
@@ -412,6 +433,7 @@ export async function prepareAdapterExchange(
             abortSignal: upstream.signal,
             ...(transportState.imageTierBias > 0 ? { imageTierBias: transportState.imageTierBias } : {}),
           });
+          await applyHeadroomRoute(retryRequest, config);
           recordAdapterReasoning(logCtx, retryRequest);
           recordAdapterTier(logCtx, retryRequest);
         } catch (err) {
@@ -972,6 +994,57 @@ export async function prepareAdapterExchange(
           if ("failed" in result) return result.failed;
           upstreamResponse = result;
           continue recovery;
+        }
+      }
+      // Anthropic OAuth capability-rejection recovery (dario's chain): the CC
+      // fingerprint ships flags/knobs the account tier or model may refuse. Learn
+      // the rejection, cache it against the account/model, and rebuild — the next
+      // build emits the reduced shape and every later request skips the round-trip.
+      if (
+        upstreamResponse.status === 400
+        && route.provider.adapter === "anthropic"
+        && route.provider.authMode === "oauth"
+        && anthropicCapability400Passes < 4
+        && !sendBudgetExhausted()
+      ) {
+        let rejectionBody: string | undefined;
+        try {
+          const peek = await readBoundedResponseBody(upstreamResponse.clone(), { signal: upstream.signal });
+          if (peek.displaySafe && !peek.truncated) rejectionBody = peek.text;
+        } catch { /* unreadable — forward the original 400 */ }
+        if (rejectionBody !== undefined) {
+          const accountKey = parsed._anthropicIdentity?.accountId ?? "default";
+          const wireModel = stripClaudeContext1mTag(parsed.modelId);
+          // Dario's order: beta flags → effort level → effort param → max_tokens → long context.
+          const rejectedBetas = parseClaudeBetaRejection(rejectionBody);
+          const effortRejection = rejectedBetas.length === 0 ? parseClaudeEffortRejection(rejectionBody) : null;
+          const effortUnsupported = rejectedBetas.length === 0 && effortRejection === null
+            && isClaudeEffortParamUnsupported(rejectionBody);
+          const maxTokensCap = rejectedBetas.length === 0 && effortRejection === null && !effortUnsupported
+            ? parseClaudeMaxTokensRejection(rejectionBody) : null;
+          const longContextRejected = rejectedBetas.length === 0 && effortRejection === null
+            && !effortUnsupported && maxTokensCap === null
+            && isClaudeLongContextRejection(rejectionBody);
+          if (rejectedBetas.length > 0) {
+            noteClaudeBetaRejection(accountKey, rejectedBetas);
+          } else if (effortRejection) {
+            noteClaudeEffortSupport(wireModel, effortRejection.supported);
+          } else if (effortUnsupported) {
+            noteClaudeEffortSupport(wireModel, []);
+          } else if (maxTokensCap !== null) {
+            noteClaudeMaxTokensCap(wireModel, maxTokensCap);
+          } else if (longContextRejected) {
+            noteClaudeContext1mUnavailable(accountKey);
+          }
+          if (rejectedBetas.length > 0 || effortRejection || effortUnsupported || maxTokensCap !== null || longContextRejected) {
+            anthropicCapability400Passes += 1;
+            try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+            invalidateSameTargetRequest();
+            const result = await rebuildAndRefetch("anthropic-beta-400");
+            if ("failed" in result) return result.failed;
+            upstreamResponse = result;
+            continue recovery;
+          }
         }
       }
       break;

@@ -1,4 +1,4 @@
-import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
+import type { AnthropicOAuthMetadata, KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { initializeProviderModelSelection } from "../providers/initial-model-selection";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { ConfigMutationLockError, loadConfig, mutatePersistedConfig, saveConfig } from "../config";
@@ -48,7 +48,7 @@ import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
 import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
-import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
+import { detectClaudeCodeToken, detectGrokCliToken, detectLocalClaudeIdentity, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { clearManualCodeSlot, ensureManualCodeSlot, kiroLoginSettling, loginAbort, loginState, waitForManualLoginCode } from "./login-flow-state";
@@ -96,6 +96,12 @@ export interface OAuthAccessSnapshot {
    * can pair account A's token with account B's origin during a concurrent switch (#2568d).
    */
   apiBaseUrl?: string;
+  /**
+   * Claude Code identity bound to THIS account — device/account/session triple carried
+   * by the request fingerprint. Read-only on the snapshot; rotation state lives in
+   * src/claude/cc-fingerprint.ts's per-account registry.
+   */
+  anthropic?: AnthropicOAuthMetadata;
 }
 
 export interface ObservedOAuthAccessSnapshot extends OAuthAccessSnapshot {
@@ -502,6 +508,10 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
           },
         }
       : {}),
+    // Claude Code identity travels with the account — a failover to a different OAuth
+    // account must carry THAT account's device/account/session triple, never borrow
+    // the previous one's.
+    ...(provider === "anthropic" && cred.anthropic ? { anthropic: cred.anthropic } : {}),
   };
 }
 
@@ -826,6 +836,7 @@ function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCrede
     ...(fresh.email === undefined && previous.email ? { email: previous.email } : {}),
     ...(fresh.accountId === undefined && previous.accountId ? { accountId: previous.accountId } : {}),
     ...(fresh.kiro === undefined && previous.kiro ? { kiro: previous.kiro } : {}),
+    ...(fresh.anthropic === undefined && previous.anthropic ? { anthropic: previous.anthropic } : {}),
   };
 }
 export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const writerGeneration=captureConfigGeneration();const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const stored=getAccountCredential(provider,accountId);if(!stored)throw new OAuthLoginRequiredError(provider);const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh,deps.signal),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(error instanceof OAuthMutationBusyError){permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));throw error;}if(!terminal(error))throw error;const failedAt=now();permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),failedAt+XAI_PERMANENT_FAILURE_TTL_MS);sweepExpiredOnWrite(failedAt);await markAccountNeedsReauthIfGeneration(provider,accountId,generation,writerGeneration);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
@@ -896,7 +907,27 @@ export async function refreshAnthropicAccountWithLock(
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);
     const disk = newerClaudeCredential(stored, now());
     if (disk) {
-      const outcome = await mergeAccountCredential(provider, accountId, disk, {
+      // mergeAccountCredential replaces the record wholesale — carry the account's
+      // identity forward or the adoption silently drops the CC fingerprint data
+      // (and the accountId/email labels). ~/.claude.json is the source of truth for
+      // WHICH account the disk credential belongs to: when it disagrees with the
+      // stored identity the user re-logged into a different subscription, and the
+      // stored account labels must not follow the new token.
+      const localIdentity = detectLocalClaudeIdentity();
+      const sameInstallAccount = !localIdentity?.accountUuid
+        || !stored.anthropic?.accountUuid
+        || localIdentity.accountUuid === stored.anthropic.accountUuid;
+      const adoption: OAuthCredentials = {
+        ...disk,
+        ...(sameInstallAccount && stored.accountId ? { accountId: stored.accountId } : {}),
+        ...(sameInstallAccount && stored.email ? { email: stored.email } : {}),
+        ...(sameInstallAccount && stored.anthropic
+          ? { anthropic: stored.anthropic }
+          : localIdentity && (localIdentity.deviceId || localIdentity.accountUuid)
+            ? { anthropic: { ...localIdentity, sessionId: randomUUID() } }
+            : {}),
+      };
+      const outcome = await mergeAccountCredential(provider, accountId, adoption, {
         expectedGeneration: credentialGeneration(stored),
         afterPrePersistRead: deps.afterPrePersistRead,
       });

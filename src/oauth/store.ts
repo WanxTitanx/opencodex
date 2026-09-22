@@ -522,6 +522,32 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
       };
     }
   }
+  if (candidate.anthropic && typeof candidate.anthropic === "object") {
+    const anthropic = candidate.anthropic;
+    const cleanAnthropic = (value: unknown, max: number): string | undefined => {
+      if (typeof value !== "string") return undefined;
+      const trimmed = value.trim();
+      return trimmed && trimmed.length <= max && !/[\x00-\x1f\x7f]/.test(trimmed) ? trimmed : undefined;
+    };
+    const deviceId = cleanAnthropic(anthropic.deviceId, 128);
+    const accountUuid = cleanAnthropic(anthropic.accountUuid, 128);
+    const sessionId = cleanAnthropic(anthropic.sessionId, 128);
+    const organizationUuid = cleanAnthropic(anthropic.organizationUuid, 128);
+    const organizationType = cleanAnthropic(anthropic.organizationType, 64);
+    const rateLimitTier = cleanAnthropic(anthropic.rateLimitTier, 64);
+    const seatTier = cleanAnthropic(anthropic.seatTier, 64);
+    if (deviceId || accountUuid || sessionId || organizationUuid) {
+      normalized.anthropic = {
+        ...(deviceId ? { deviceId } : {}),
+        ...(accountUuid ? { accountUuid } : {}),
+        ...(sessionId ? { sessionId } : {}),
+        ...(organizationUuid ? { organizationUuid } : {}),
+        ...(organizationType ? { organizationType } : {}),
+        ...(rateLimitTier ? { rateLimitTier } : {}),
+        ...(seatTier ? { seatTier } : {}),
+      };
+    }
+  }
   return normalized;
 }
 

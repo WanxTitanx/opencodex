@@ -56,6 +56,29 @@ export interface OcxParsedRequest {
   options: OcxRequestOptions;
   _rawBody?: unknown;
   /**
+   * The client's original Anthropic Messages body, stashed by the /v1/messages
+   * translator before the Responses-shaped replay. The anthropic adapter's OAuth
+   * branch rebuilds the upstream request from THIS body — the genuine Claude Code
+   * path needs its system blocks, tool list and field order preserved, which the
+   * internal round-trip cannot guarantee.
+   */
+  _anthropicSourceBody?: Record<string, unknown>;
+  /** CC-identity headers forwarded verbatim by the genuine-CC path (dario). */
+  _anthropicClientHeaders?: Record<string, string>;
+  /** The client's raw anthropic-beta header — merge input for the computed beta set. */
+  _anthropicClientBeta?: string;
+  /**
+   * The serving OAuth account's Claude Code identity, stamped once the transport
+   * resolves the credential. `accountId` keys the session/beta caches; the
+   * device/account/session triple lands in `metadata.user_id`.
+   */
+  _anthropicIdentity?: {
+    accountId: string;
+    deviceId?: string;
+    accountUuid?: string;
+    sessionSeed?: string;
+  };
+  /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
    * CLIENT already carried that history verbatim and the proxy skipped the prepend.

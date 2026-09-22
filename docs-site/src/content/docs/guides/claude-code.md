@@ -12,6 +12,15 @@ included — with zero extra auth work.
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.
 
+On a machine that already has Claude Code signed in, you usually do not need `ocx login
+anthropic` at all: when the anthropic OAuth roster is empty, the proxy automatically imports
+the credential Claude Code already holds (its credentials file or the OS credential store —
+macOS Keychain, Linux Secret Service, or Windows Credential Manager — whichever is freshest).
+The import is read-only toward Claude Code, fetches the subscription profile best-effort, and
+carries the account's device/account/session identity so upstream sees first-party Claude Code
+traffic billed against the subscription rather than API-key usage. An `authMode: "key"`
+provider row is never flipped by the import.
+
 An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`) adds sticky
 session affinity and usage-aware new-session selection across those OAuth accounts. It does
 **not** gate 429 failover: with two or more usable accounts stored, a rate-limited request moves
