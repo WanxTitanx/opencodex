@@ -233,6 +233,9 @@ const RECOVERY_KIND_CAUSE = {
   // long context) are all "the upstream refused this parameter for this
   // account/model" — same cause family as the effort downgrade.
   "anthropic-beta-400": "parameter-rejected",
+  // Anthropic refused `speed: "fast"` (no usage credits, org not enabled, model outside the
+  // lane); the same turn succeeds once the parameter is dropped.
+  "anthropic-fast-downgrade": "parameter-rejected",
 } as const satisfies Record<AttemptRecoveryKind, RequestFailureCause>;
 
 export function causeForRecoveryKind(kind: AttemptRecoveryKind): RequestFailureCause {
