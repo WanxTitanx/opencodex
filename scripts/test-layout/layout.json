@@ -379,6 +379,7 @@
     "claude-intercept-settings.test.ts": "claude-integration",
     "claude-management-api.test.ts": "claude-integration",
     "claude-manual-env.test.ts": "gui",
+    "claude-messages-desktop-routes.test.ts": "claude-integration",
     "claude-messages-endpoint.test.ts": "claude-integration",
     "claude-model-info.test.ts": "claude-integration",
     "claude-models-discovery.test.ts": "claude-integration",
