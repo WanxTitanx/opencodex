@@ -8,13 +8,14 @@ import Logs from "./pages/Logs";
 import Usage from "./pages/Usage";
 import Storage from "./pages/Storage";
 import CodexSet from "./pages/CodexSet";
+import ApiKeysPage from "./pages/ApiKeysPage";
 import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import RemoteWorkspace from "./pages/RemoteWorkspace";
 import Headroom from "./pages/Headroom";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh, IconFilter} from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh, IconFilter, IconKey } from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Select, ToastNotice, type NoticeTone } from "./ui";
 import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
@@ -42,6 +43,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
   remote: "nav.remote",
   headroom: "nav.headroom",
   "codex-set": "nav.codexSet",
+  "api-keys": "nav.apiKeys",
   integrations: "nav.integrations",
 };
 
@@ -76,6 +78,7 @@ const NAV: NavEntry[] = [
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
   { id: "remote", tkey: "nav.remote", Icon: IconMonitor },
   { id: "headroom", tkey: "nav.headroom", Icon: IconFilter },
+  { id: "api-keys", tkey: "nav.apiKeys", Icon: IconKey },
   { id: "integrations", tkey: "nav.integrations", Icon: IconGlobe },
 ];
 
@@ -514,6 +517,7 @@ export default function App() {
                 {page === "remote" && <RemoteWorkspace apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} />}
                 {page === "headroom" && <Headroom apiBase={sharedBase} />}
                 {page === "codex-set" && <CodexSet apiBase={sharedBase} />}
+                {page === "api-keys" && <ApiKeysPage apiBase={sharedBase} />}
                 {page === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
               </>
             )}

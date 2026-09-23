@@ -14,8 +14,11 @@ import {
   type ApiAuthMatrixRow,
   type ApiEndpointInfo,
   type ApiKeyEntry,
+  type ApiKeyQuota,
   type ModelTests,
 } from "../../pages/api-keys-utils";
+import ApiKeyQuotaEditor from "./ApiKeyQuotaEditor";
+import ApiKeyModelAccessEditor from "./ApiKeyModelAccessEditor";
 import {
   ApiKeysEndpointsPanel,
   ApiKeysManagePanel,
@@ -45,6 +48,8 @@ export interface ApiKeysWorkspaceProps {
   claudeCodeEnabled: boolean;
   localeTag?: string;
   newName: string;
+  /** Create form's optional quota inputs, as raw strings ("" = no limit). */
+  newQuota: Record<"dailyUsd" | "weeklyUsd" | "monthlyUsd", string>;
   creating: boolean;
   newKey: string | null;
   copied: boolean;
@@ -62,11 +67,16 @@ export interface ApiKeysWorkspaceProps {
   modelTests: ModelTests;
   canTestModels: boolean;
   onNewNameChange: (value: string) => void;
+  onNewQuotaChange: (value: Record<"dailyUsd" | "weeklyUsd" | "monthlyUsd", string>) => void;
   onCreate: () => void;
   onDismissNewKey: () => void;
   onCopyKey: () => void;
   onDelete: (id: string) => Promise<boolean>;
   onRename: (id: string, name: string) => Promise<boolean>;
+  onUpdateQuota: (id: string, quota: ApiKeyQuota | null) => Promise<boolean>;
+  onUpdateScope: (id: string, scope: { allowedModels: string[] | null; allowedProviders: string[] | null }) => Promise<boolean>;
+  onResetQuota: (id: string) => Promise<boolean>;
+  onResetAllQuotas: () => Promise<boolean>;
   onRotationStart?: (id: string) => Promise<boolean>;
   onRotationCommit?: (id: string, rotationId: string) => Promise<boolean>;
   onRotationAbort?: (id: string, rotationId: string) => Promise<boolean>;
@@ -94,6 +104,7 @@ export default function ApiKeysWorkspace({
   claudeCodeEnabled,
   localeTag,
   newName,
+  newQuota,
   creating,
   newKey,
   copied,
@@ -110,11 +121,16 @@ export default function ApiKeysWorkspace({
   modelTests,
   canTestModels,
   onNewNameChange,
+  onNewQuotaChange,
   onCreate,
   onDismissNewKey,
   onCopyKey,
   onDelete,
   onRename,
+  onUpdateQuota,
+  onUpdateScope,
+  onResetQuota,
+  onResetAllQuotas,
   onRotationStart,
   onRotationCommit,
   onRotationAbort,
@@ -365,6 +381,19 @@ export default function ApiKeysWorkspace({
                     </div>
                   </dl>
                 </div>
+                <ApiKeyQuotaEditor
+                  key={`quota:${selected.id}`}
+                  entry={selected}
+                  localeTag={localeTag}
+                  onSave={onUpdateQuota}
+                  onReset={onResetQuota}
+                />
+                <ApiKeyModelAccessEditor
+                  key={`access:${selected.id}`}
+                  apiBase={apiBase}
+                  entry={selected}
+                  onSave={onUpdateScope}
+                />
                 <div className="awi-section" aria-live="polite">
                   <h3 className="awi-section-title">{t("api.rotation.title")}</h3>
                   {selectedRotationId ? (
@@ -453,6 +482,7 @@ export default function ApiKeysWorkspace({
                     keysLoading={keysLoading}
                     keysLoadFailed={keysLoadFailed}
                     newName={newName}
+                    newQuota={newQuota}
                     creating={creating}
                     newKey={newKey}
                     copied={copied}
@@ -460,6 +490,7 @@ export default function ApiKeysWorkspace({
                     localeTag={localeTag}
                     showKeyList={false}
                     onNewNameChange={onNewNameChange}
+                    onNewQuotaChange={onNewQuotaChange}
                     onCreate={onCreate}
                     onDismissNewKey={onDismissNewKey}
                     onCopyKey={onCopyKey}
@@ -478,6 +509,7 @@ export default function ApiKeysWorkspace({
                     usageMetadata={usageMetadata}
                     localeTag={localeTag}
                     busy={mutationPending}
+                    onResetAllQuotas={onResetAllQuotas}
                     onSelect={id => {
                       setSelectedId(id);
                       clearDeleteConfirm();

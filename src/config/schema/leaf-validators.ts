@@ -680,6 +680,48 @@ const pendingApiKeyRotationSchema = z.object({
   expiresAt: z.string().datetime({ offset: true }),
 }).strict();
 
+/** Upper bound shared by the config schema and the POST/PATCH /api/keys write boundary. */
+export const API_KEY_QUOTA_MAX_USD = 1_000_000;
+export const API_KEY_QUOTA_FIELDS = ["dailyUsd", "weeklyUsd", "monthlyUsd"] as const;
+
+const apiKeyQuotaUsdFieldSchema = z.number().finite().min(0).max(API_KEY_QUOTA_MAX_USD);
+
+export const apiKeyQuotaSchema = z.object({
+  dailyUsd: apiKeyQuotaUsdFieldSchema.optional(),
+  weeklyUsd: apiKeyQuotaUsdFieldSchema.optional(),
+  monthlyUsd: apiKeyQuotaUsdFieldSchema.optional(),
+}).strict();
+
+/**
+ * Write-boundary rule for `quota` on POST/PATCH /api/keys: a plain object holding
+ * any subset of the three windows, each a finite USD limit between 0 and the
+ * cap (0 = unlimited). Returns null when valid; the config read schema applies
+ * the same bounds via `apiKeyQuotaSchema` but degrades a bad value to absent
+ * instead of reporting it.
+ */
+export function apiKeyQuotaConfigError(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "quota must be a plain object";
+  }
+  for (const field of Object.keys(value as Record<string, unknown>)) {
+    if (!(API_KEY_QUOTA_FIELDS as readonly string[]).includes(field)) {
+      return `quota accepts only ${API_KEY_QUOTA_FIELDS.join(", ")}`;
+    }
+  }
+  const quota = value as Record<string, unknown>;
+  for (const field of API_KEY_QUOTA_FIELDS) {
+    const entry = quota[field];
+    if (entry === undefined) continue;
+    if (typeof entry !== "number" || !Number.isFinite(entry)) {
+      return `quota.${field} must be a finite number`;
+    }
+    if (entry < 0) return `quota.${field} must be >= 0`;
+    if (entry > API_KEY_QUOTA_MAX_USD) return `quota.${field} must be <= ${API_KEY_QUOTA_MAX_USD}`;
+  }
+  return null;
+}
+
 export const apiKeyEntrySchema = z.object({
   key: z.string().refine(isUsableApiKeySecret),
   // Degrades to "" here; every schema consumer then runs `normalizeApiKeyIds`,
@@ -689,6 +731,10 @@ export const apiKeyEntrySchema = z.object({
   createdAt: z.string().catch(""),
   // A damaged overlap record must never discard the still-authoritative key.
   pendingRotation: pendingApiKeyRotationSchema.optional().catch(undefined),
+  // Unlike the permission fields below a damaged quota widens nothing a client
+  // could not already do, so it degrades to absent and keeps the key.
+  quota: apiKeyQuotaSchema.optional().catch(undefined),
+  quotaResetAt: z.string().optional().catch(undefined),
   // Deliberately NOT `.catch`ed, unlike every field above. Degrading a damaged
   // scope to `undefined` would silently widen the key to the whole catalog,
   // which is the one direction a permission field must never fail. Letting the

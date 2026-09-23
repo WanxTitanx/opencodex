@@ -20,11 +20,15 @@ import {
   DEFAULT_ENDPOINTS,
   deriveApiEndpoints,
   isApiAuthMatrix,
+  isApiKeyQuota,
+  isApiKeyScopeList,
+  isApiKeySpend,
   isApiKeyUsage,
   isAudioApiInfo,
   type ApiEndpointInfo,
   type ApiAuthMatrixRow,
   type ApiKeyEntry,
+  type ApiKeyQuota,
   type ModelTestResult,
   type ModelTests,
 } from "./api-keys-utils";
@@ -90,7 +94,7 @@ function seedEndpointsFromApiBase(apiBase: string): ApiEndpointInfo {
 /** Session-cache entries get the same scrutiny as a network payload. */
 function validCachedKeys(cached: CachedKeysShape | null): CachedKeysShape | null {
   if (!cached || !isApiAuthMatrix(cached.authMatrix)) return null;
-  if (!Array.isArray(cached.keys) || cached.keys.some(key => !key || !isApiKeyUsage(key.usage) || !validPendingRotation(key.pendingRotation))) return null;
+  if (!Array.isArray(cached.keys) || cached.keys.some(key => !key || !validKeyRow(key))) return null;
   if (cached.endpoints?.audio !== undefined && !isAudioApiInfo(cached.endpoints.audio, cached.endpoints.baseUrl)) {
     const { audio: _audio, ...endpoints } = cached.endpoints;
     return { ...cached, endpoints };
@@ -107,6 +111,19 @@ function validPendingRotation(value: ApiKeyEntry["pendingRotation"] | unknown): 
     && typeof pending.expiresAt === "string" && !Number.isNaN(Date.parse(pending.expiresAt));
 }
 
+/** Every field of one key row, shared by the network and cache validators. */
+function validKeyRow(key: Partial<ApiKeyEntry> | null | undefined): boolean {
+  if (!key) return false;
+  if (!isApiKeyUsage(key.usage) || !validPendingRotation(key.pendingRotation)) return false;
+  // A malformed quota or spend object coerced to zeroes would read "unlimited"
+  // — the one claim a validator must never make about access control.
+  if (!isApiKeyQuota(key.quota) || !isApiKeySpend(key.spend)) return false;
+  if (!isApiKeyScopeList(key.allowedModels) || !isApiKeyScopeList(key.allowedProviders)) return false;
+  if (key.quotaResetAt !== undefined
+    && (typeof key.quotaResetAt !== "string" || Number.isNaN(Date.parse(key.quotaResetAt)))) return false;
+  return true;
+}
+
 /**
  * `active` gates both resources. As one panel of the Integrations tab strip
  * this stays mounted while hidden — which is what preserves in-progress key
@@ -116,9 +133,9 @@ function validPendingRotation(value: ApiKeyEntry["pendingRotation"] | unknown): 
 export default function ApiKeys({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
   const { t, locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
-  // v2: a v1 session entry has no auth matrix, and defaulting that to [] would
-  // turn stale client state into an apparently authoritative empty auth table.
-  const keysCacheKey = `ocx.apikeys.list.v2:${apiBase}`;
+  // v3: v1/v2 session entries carry no quota/spend objects, and defaulting
+  // those would state "unlimited, never spent" about data we could not read.
+  const keysCacheKey = `ocx.apikeys.list.v3:${apiBase}`;
   const modelsCacheKey = `ocx.apikeys.models.v1:${apiBase}`;
   const keysResourceKey = `api-keys:${apiBase}`;
   const modelsResourceKey = `api-models:${apiBase}`;
@@ -134,6 +151,10 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   const [copiedModelId, setCopiedModelId] = useState<string | null>(null);
   const [modelTests, setModelTests] = useState<ModelTests>({});
   const [newName, setNewName] = useState("");
+  /** Raw input strings — "" means "no limit", which is what the backend's 0 says. */
+  const [newQuota, setNewQuota] = useState<Record<"dailyUsd" | "weeklyUsd" | "monthlyUsd", string>>({
+    dailyUsd: "", weeklyUsd: "", monthlyUsd: "",
+  });
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -148,7 +169,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
     // the rules from memory, which is the defect this replaces.
     if (!data || !isApiAuthMatrix(data.authMatrix)) throw new Error(t("api.keysLoadFailed"));
     const rows = data.keys ?? [];
-    if (rows.some(key => !isApiKeyUsage(key.usage) || !validPendingRotation(key.pendingRotation))) throw new Error(t("api.keysLoadFailed"));
+    if (rows.some(key => !validKeyRow(key))) throw new Error(t("api.keysLoadFailed"));
     const validatedKeys = rows as ApiKeyEntry[];
     const derived = deriveApiEndpoints(data.endpoint ?? "");
     const next: CachedKeysShape = {
@@ -250,8 +271,30 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
     });
   }, [modelQuery, models]);
 
+  /** Parse the create form's three USD inputs. All-empty means "send no quota";
+   *  a non-empty field that is not a finite non-negative number rejects the
+   *  create client-side rather than letting the server 400 it. */
+  const createQuotaPayload = (): { quota: ApiKeyQuota } | null | false => {
+    const parsed: ApiKeyQuota = { dailyUsd: 0, weeklyUsd: 0, monthlyUsd: 0 };
+    let anySet = false;
+    for (const field of ["dailyUsd", "weeklyUsd", "monthlyUsd"] as const) {
+      const raw = newQuota[field].trim();
+      if (!raw) continue;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0) return false;
+      if (value > 0) anySet = true;
+      parsed[field] = value;
+    }
+    return anySet ? { quota: parsed } : null;
+  };
+
   const handleCreate = async (name?: string): Promise<boolean> => {
     if (creatingRef.current) return false;
+    const quotaPayload = createQuotaPayload();
+    if (quotaPayload === false) {
+      setActionError(t("api.quota.invalidValue"));
+      return false;
+    }
     creatingRef.current = true;
     setCreating(true);
     setActionError(null);
@@ -260,7 +303,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       const res = await fetch(`${apiBase}/api/keys`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: effectiveName || "default" }),
+        body: JSON.stringify({ name: effectiveName || "default", ...(quotaPayload ?? {}) }),
       });
       const data = await readJsonOrThrow<CreateKeyResponse>(res, t("api.createFailed"));
       if (typeof data?.key !== "string" || data.key.length === 0) {
@@ -269,6 +312,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       }
       setNewKey(data.key);
       setNewName("");
+      setNewQuota({ dailyUsd: "", weeklyUsd: "", monthlyUsd: "" });
       refreshKeys();
       return true;
     } catch {
@@ -321,6 +365,94 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       });
       // The detail pane renders this failure next to the draft it concerns; a
       // page-level banner would say it twice and outlive the key.
+      if (!res.ok) return false;
+      refreshKeys();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      bounded.clear();
+    }
+  };
+
+  /** Quota edits take the same pessimistic shape as rename: the pane keeps its
+   *  draft on failure and reports inline, so a rejected write never discards
+   *  numbers the operator just typed. `null` clears the quota entirely. */
+  const handleUpdateQuota = async (id: string, quota: ApiKeyQuota | null): Promise<boolean> => {
+    setActionError(null);
+    const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${apiBase}/api/keys`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, quota }),
+        signal: bounded.signal,
+      });
+      if (!res.ok) return false;
+      refreshKeys();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      bounded.clear();
+    }
+  };
+
+  /** Scope lists are independent fields: `null` clears one back to unrestricted
+   *  without touching the other (or the quota). */
+  const handleUpdateScope = async (
+    id: string,
+    scope: { allowedModels: string[] | null; allowedProviders: string[] | null },
+  ): Promise<boolean> => {
+    setActionError(null);
+    const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${apiBase}/api/keys`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, ...scope }),
+        signal: bounded.signal,
+      });
+      if (!res.ok) return false;
+      refreshKeys();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      bounded.clear();
+    }
+  };
+
+  const handleResetQuota = async (id: string): Promise<boolean> => {
+    setActionError(null);
+    const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${apiBase}/api/keys/quota/reset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+        signal: bounded.signal,
+      });
+      if (!res.ok) return false;
+      refreshKeys();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      bounded.clear();
+    }
+  };
+
+  const handleResetAllQuotas = async (): Promise<boolean> => {
+    setActionError(null);
+    const bounded = createBoundedFetch(MUTATION_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${apiBase}/api/keys/quota/reset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ all: true }),
+        signal: bounded.signal,
+      });
       if (!res.ok) return false;
       refreshKeys();
       return true;
@@ -480,9 +612,8 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
       className="api-page"
       aria-busy={keysState.refreshing || modelsState.refreshing || undefined}
     >
-      <div className="page-head">
-        <h2>{t("api.title")}</h2>
-      </div>
+      {/* No h2 here: ApiKeysPage owns the page title now; this line stays
+          because it documents the one header every endpoint accepts. */}
       <p className="page-sub">
         {subtitleParts[0]}
         <code>x-opencodex-api-key</code>
@@ -518,6 +649,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         claudeCodeEnabled={claudeCodeEnabled}
         localeTag={localeTag}
         newName={newName}
+        newQuota={newQuota}
         creating={creating}
         newKey={newKey}
         copied={copied}
@@ -537,11 +669,16 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         copiedModelId={copiedModelId}
         modelTests={modelTests}
         onNewNameChange={setNewName}
+        onNewQuotaChange={setNewQuota}
         onCreate={() => { void handleCreate(); }}
         onDismissNewKey={() => setNewKey(null)}
         onCopyKey={() => { void copyKey(); }}
         onDelete={handleDelete}
         onRename={handleRename}
+        onUpdateQuota={handleUpdateQuota}
+        onUpdateScope={handleUpdateScope}
+        onResetQuota={handleResetQuota}
+        onResetAllQuotas={handleResetAllQuotas}
         {...(isConnectedRuntime() ? {
           // Key rotation is a connected-client operation: it swaps the data key this
           // machine uses against its hub, with a commit/abort handshake the hub arbitrates.

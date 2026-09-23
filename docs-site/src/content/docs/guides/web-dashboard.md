@@ -216,7 +216,7 @@ they have been synchronized. See
 
 ## Remote Hub sessions, keys, and usage
 
-The dashboard's management plane is separate from direct client→hub model traffic. **Integrations → API Keys** shows pending rotations, displays a replacement secret only once, and requires explicit commit or abort. Browser logout invalidates only the current remote session. Connected usage is the hub store filtered by the client's `apiKeyId`; disconnected usage is local, with no mirroring.
+The dashboard's management plane is separate from direct client→hub model traffic. The **API keys** page in the sidebar shows pending rotations, displays a replacement secret only once, and requires explicit commit or abort. It also manages each key's estimated-spend quotas (rolling 24 h / 7 d / 30 d, `0` = unlimited, with per-key or all-key reset) and its model access scope, which filters `/v1/models`, `/v1/catalog`, and inference requests for that key — see [API keys](/reference/configuration/server/#api-keys). Browser logout invalidates only the current remote session. Connected usage is the hub store filtered by the client's `apiKeyId`; disconnected usage is local, with no mirroring.
 
 The spawn override guarantee applies to the **built-in** v2 guidance text. A custom
 `injectionPrompt` replaces that text entirely and must include `{{model}}` and `{{effort}}`

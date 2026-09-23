@@ -59,13 +59,14 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { OcxApiKeyEntry, OcxApiKeyQuota, OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { AUTH_MATRIX, isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
+import { apiKeyQuotaConfigError } from "../../config/schema/leaf-validators";
 import { buildApiAccessEndpoints } from "./api-access";
 import {
   abortApiKeyRotation,
@@ -145,6 +146,46 @@ function validateKeyName(
   if (opts.required && !value) return { error: "name required" };
   if (value.length > 64) return { error: "name too long" };
   return { value };
+}
+
+/**
+ * The quota/scope write fields POST and PATCH /api/keys share. Each field is
+ * applied only when the caller actually sent it, so a rename never has to
+ * restate a scope and a scope edit never has to restate a quota. `null`
+ * clears a field back to unrestricted. Returns an error message on the first
+ * field that fails validation — nothing is published until every field is
+ * accepted.
+ */
+function applyApiKeyWriteFields(
+  body: Record<string, unknown>,
+  entry: OcxApiKeyEntry,
+): string | null {
+  if (body.quota !== undefined) {
+    if (body.quota === null) delete entry.quota;
+    else {
+      const error = apiKeyQuotaConfigError(body.quota);
+      if (error) return error;
+      // A subset PATCH merges into the existing quota so the three windows
+      // update independently; the write boundary already rejected non-number
+      // values, so this spread carries only validated fields.
+      entry.quota = { ...(entry.quota ?? {}), ...(body.quota as OcxApiKeyQuota) };
+    }
+  }
+  for (const field of ["allowedProviders", "allowedModels"] as const) {
+    const value = body[field];
+    if (value === undefined) continue;
+    // `null` and `[]` both clear the list back to unrestricted; anything else
+    // must be a list of non-empty strings, because a silently ignored malformed
+    // scope would read as "allowed everything" to whoever set it.
+    if (value === null) { delete entry[field]; continue; }
+    if (!Array.isArray(value) || value.some(item => typeof item !== "string" || !item.trim() || item.length > 256)) {
+      return `${field} must be a list of non-empty names`;
+    }
+    const normalized = [...new Set((value as string[]).map(item => item.trim()))];
+    if (normalized.length === 0) delete entry[field];
+    else entry[field] = normalized;
+  }
+  return null;
 }
 
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -859,7 +900,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       requestOrigin: req.headers.get("origin"),
     });
     const { readApiKeyUsageRollup } = await import("./api-key-usage");
+    const { getApiKeySpend } = await import("../api-key-quota");
     const { rollup, attributionSince, historyTruncated, usageIncomplete, usageIncompleteReason } = await readApiKeyUsageRollup(keys.map(k => k.id), config.managementUsageMaxReadBytes);
+    // One warm-up shared across the whole list: awaiting the first key warms
+    // the tracker, every later key reads the already-built buckets.
+    const spends = new Map(await Promise.all(keys.map(async k => [k.id, await getApiKeySpend(config, k.id)] as const)));
     return jsonResponse({
       // 8 random hex past the fixed `ocx_data_` literal: enough to tell two keys
       // apart in a list, with 128 bits of the tail still unrevealed. Masking only
@@ -873,6 +918,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         // what a key may reach without minting a replacement to find out.
         ...(k.allowedProviders ? { allowedProviders: [...k.allowedProviders] } : {}),
         ...(k.allowedModels ? { allowedModels: [...k.allowedModels] } : {}),
+        // Unset windows report 0, the same "unlimited" the gate applies.
+        quota: {
+          dailyUsd: k.quota?.dailyUsd ?? 0,
+          weeklyUsd: k.quota?.weeklyUsd ?? 0,
+          monthlyUsd: k.quota?.monthlyUsd ?? 0,
+        },
+        ...(k.quotaResetAt ? { quotaResetAt: k.quotaResetAt } : {}),
+        spend: spends.get(k.id) ?? { dailyUsd: 0, weeklyUsd: 0, monthlyUsd: 0, unpricedRequests: 0 },
         ...(k.pendingRotation ? { pendingRotation: {
           id: k.pendingRotation.id,
           createdAt: k.pendingRotation.createdAt,
@@ -945,11 +998,21 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // than the RNG. 20 bytes is the same 40 hex characters as before, so nothing
     // that pattern-matches the key shape changes.
     const key = "ocx_data_" + randomBytes(20).toString("hex");
-    const entry = { id: randomUUID(), name, key, createdAt: new Date().toISOString() };
+    const entry: OcxApiKeyEntry = { id: randomUUID(), name, key, createdAt: new Date().toISOString() };
+    const writeError = applyApiKeyWriteFields(body, entry);
+    if (writeError) return jsonResponse({ error: writeError }, 400, req, config);
     config.apiKeys = [...(config.apiKeys ?? []), entry];
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
-    return jsonResponse({ id: entry.id, name: entry.name, key: entry.key, createdAt: entry.createdAt }, 201, req, config);
+    return jsonResponse({
+      id: entry.id,
+      name: entry.name,
+      key: entry.key,
+      createdAt: entry.createdAt,
+      ...(entry.quota ? { quota: { ...entry.quota } } : {}),
+      ...(entry.allowedProviders ? { allowedProviders: [...entry.allowedProviders] } : {}),
+      ...(entry.allowedModels ? { allowedModels: [...entry.allowedModels] } : {}),
+    }, 201, req, config);
   }
 
   if (url.pathname === "/api/keys" && req.method === "PATCH") {
@@ -959,34 +1022,23 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const existing = (config.apiKeys ?? []).find(k => k.id === body.id);
     if (!existing) return jsonResponse({ error: "key not found" }, 404, req, config);
     const entry = { ...existing };
-    // Rename and scope are independent edits. A scope-only PATCH must not have
-    // to restate the name, and a rename must not silently widen a scope, so
+    // Rename, quota and scope are independent edits. A quota-only PATCH must not
+    // have to restate the name, and a rename must not silently widen a scope, so
     // each field is applied only when the caller actually sent it.
     const renaming = body.name !== undefined;
+    const touchingQuota = body.quota !== undefined;
     const scopingProviders = body.allowedProviders !== undefined;
     const scopingModels = body.allowedModels !== undefined;
-    if (!renaming && !scopingProviders && !scopingModels) {
-      return jsonResponse({ error: "name, allowedProviders or allowedModels required" }, 400, req, config);
+    if (!renaming && !touchingQuota && !scopingProviders && !scopingModels) {
+      return jsonResponse({ error: "name, quota, allowedProviders or allowedModels required" }, 400, req, config);
     }
     if (renaming) {
       const nameField = validateKeyName(body.name, { required: true });
       if ("error" in nameField) return jsonResponse({ error: nameField.error }, 400, req, config);
       entry.name = nameField.value;
     }
-    for (const [field, sent] of [["allowedProviders", scopingProviders], ["allowedModels", scopingModels]] as const) {
-      if (!sent) continue;
-      const value = body[field];
-      // `null` and `[]` both clear the list back to unrestricted; anything else
-      // must be a list of non-empty strings, because a silently ignored malformed
-      // scope would read as "allowed everything" to whoever set it.
-      if (value === null) { delete entry[field]; continue; }
-      if (!Array.isArray(value) || value.some(item => typeof item !== "string" || !item.trim() || item.length > 256)) {
-        return jsonResponse({ error: `${field} must be a list of non-empty names` }, 400, req, config);
-      }
-      const normalized = [...new Set((value as string[]).map(item => item.trim()))];
-      if (normalized.length === 0) delete entry[field];
-      else entry[field] = normalized;
-    }
+    const writeError = applyApiKeyWriteFields(body, entry);
+    if (writeError) return jsonResponse({ error: writeError }, 400, req, config);
     // Publish the validated replacement only after every field is accepted.
     config.apiKeys = config.apiKeys!.map(key => key === existing ? entry : key);
     saveConfigPreservingClaudeCode(config);
@@ -996,6 +1048,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       id: entry.id,
       name: entry.name,
       createdAt: entry.createdAt,
+      ...(entry.quota ? { quota: { ...entry.quota } } : {}),
       ...(entry.allowedProviders ? { allowedProviders: [...entry.allowedProviders] } : {}),
       ...(entry.allowedModels ? { allowedModels: [...entry.allowedModels] } : {}),
     }, 200, req, config);
@@ -1009,9 +1062,71 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     config.apiKeys = (config.apiKeys ?? []).filter(k => k.id !== body.id);
     // A stale id must not read as a successful revocation.
     if (config.apiKeys.length === before) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const { forgetApiKey } = await import("../api-key-quota");
+    // The deleted id must stop accruing spend AND stop resolving as configured;
+    // the quota tracker's id slot is how late-arriving usage rows stay dropped.
+    forgetApiKey(body.id);
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     return jsonResponse({ success: true }, 200, req, config);
+  }
+
+  if (url.pathname === "/api/keys/quota/reset" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    if (!body) return jsonResponse({ error: "invalid body" }, 400, req, config);
+    // Exactly one of {id} or {all:true} — a body carrying both would leave the
+    // operator guessing which one ran.
+    const fields = Object.keys(body);
+    const resetAll = fields.length === 1 && body.all === true;
+    const resetOne = fields.length === 1 && typeof body.id === "string" && body.id.length > 0;
+    if (!resetAll && !resetOne) return jsonResponse({ error: "body must be exactly {id} or {all:true}" }, 400, req, config);
+    const targets = resetAll
+      ? (config.apiKeys ?? [])
+      : (config.apiKeys ?? []).filter(k => k.id === body.id);
+    if (!resetAll && targets.length === 0) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const resetAt = new Date().toISOString();
+    for (const key of targets) key.quotaResetAt = resetAt;
+    const { resetAllApiKeyQuotas, resetApiKeyQuota } = await import("../api-key-quota");
+    if (resetAll) resetAllApiKeyQuotas();
+    else resetApiKeyQuota(body.id as string);
+    saveConfigPreservingClaudeCode(config);
+    reconcileLiveStateStores();
+    return jsonResponse({ ok: true, resetAt }, 200, req, config);
+  }
+
+  if (url.pathname === "/api/keys/scope-options" && req.method === "GET") {
+    // The picker's model list is the unscoped public list — the same rows an
+    // unrestricted key sees — minus the combo namespace, which is not a scope
+    // destination. Values are the destinations scope checks against:
+    // `<provider>/<modelId>` for routed rows and `openai` native rows alike.
+    const { listPublicModelRows } = await import("../index/public-model-list");
+    const { CatalogGatherBusyError } = await import("../../codex/catalog/provider-fetch");
+    try {
+      const rows = await listPublicModelRows(config, undefined);
+      const providers = new Set<string>();
+      const models = new Map<string, { value: string; publicId: string; provider: string }>();
+      for (const { row, destination } of rows) {
+        if (destination.providerName === "combo") continue;
+        providers.add(destination.providerName);
+        const value = `${destination.providerName}/${destination.modelId}`;
+        if (!models.has(value)) {
+          models.set(value, {
+            value,
+            publicId: String(row.id),
+            provider: destination.providerName,
+          });
+        }
+      }
+      return jsonResponse({
+        providers: [...providers].sort(),
+        models: [...models.values()],
+      }, 200, req, config);
+    } catch (error) {
+      if (error instanceof CatalogGatherBusyError) {
+        return jsonResponse({ error: error.message, code: "catalog_busy" }, 503, req, config);
+      }
+      throw error;
+    }
   }
   return null;
 }

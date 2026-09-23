@@ -474,10 +474,13 @@ outcome fields from an older server do not establish successful recovery.
 | `GET, POST, DELETE /api/providers/keys` | List masked provider keys, add/activate one, or remove one | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/active` | Select a provider's active key | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/alias` | Set or clear a provider-key alias | 400 invalid input; 404 provider/key missing |
-| `GET, POST, PATCH, DELETE /api/keys` | List, create, edit, or delete data-plane admission keys | 400 invalid body/id; 404 key missing |
+| `GET, POST, PATCH, DELETE /api/keys` | List, create, edit, or delete data-plane admission keys. `GET` returns each key's `name`, `quota` (`dailyUsd` / `weeklyUsd` / `monthlyUsd`, zeros when unset), `quotaResetAt`, rolling `spend` (`dailyUsd` / `weeklyUsd` / `monthlyUsd` / `unpricedRequests`), and `allowedProviders` / `allowedModels` scope lists; `POST` and `PATCH` accept `name`, `quota` (`null` clears; a subset merges), and the two scope lists (`null` or `[]` clears each) | 400 invalid body/id or malformed quota/scope value; 404 key missing |
+| `POST /api/keys/quota/reset` | Zero a key's recorded quota spend — `{id}` for one key or `{all: true}` for every key; stamps `quotaResetAt` and keeps the configured limits | 400 body that is neither shape; 404 unknown `id` |
+| `GET /api/keys/scope-options` | List the non-combo providers and `provider/modelId` model values a key's scope lists can reference, used by the API keys page | 503 `catalog_busy` while model discovery is saturated |
 
 Credential list responses are deliberately masked. OAuth access tokens and complete provider API
-keys are not returned to dashboard clients.
+keys are not returned to dashboard clients. Data-plane keys (`ocx_data_…`) carry no management
+authority and receive 401 here like any other unauthenticated caller.
 
 ### Providers
 

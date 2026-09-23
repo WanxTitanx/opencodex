@@ -207,6 +207,9 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // untranslated `~$`); the templates are pure placeholders on purpose.
   "logs.cost.approximate",
   "logs.cost.lowerBound",
+  // "Headroom" is the sidecar's feature name; every locale keeps it verbatim.
+  "nav.headroom",
+  "headroom.title",
 ]);
 
 function placeholders(value: string): string[] {

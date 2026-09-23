@@ -112,7 +112,7 @@ they took.
   so a reverse-proxied dashboard still shows the port Cursor on this machine can reach), with a
   Copy button. The API Key row depends on the bind: when it needs no credential the row is
   `opencodex-loopback` with Copy; when API auth is on, or any opencodex API key is configured,
-  the row tells you to use one of your own keys and links to the API Keys tab. Any configured
+  the row tells you to use one of your own keys and links to the **API keys** page. Any configured
   key works, not only `OPENCODEX_API_AUTH_TOKEN`.
 - **Connection.** The last `/v1/models` request whose User-Agent is exactly `Cursor/<version>`
   (the header Cursor's local-agent runtime sends), with the time and the version. It reads

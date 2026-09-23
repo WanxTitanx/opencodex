@@ -117,8 +117,8 @@ export default function CursorIntegrationPage({ apiBase, active }: { apiBase: st
                 <div className="cursor-gateway-row">
                   <span className="cursor-gateway-label">{t("integrations.cursor.apiKey")}</span>
                   <span className="cursor-gateway-value">{t("integrations.cursor.apiKeyCredential")}</span>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigateHash("integrations/keys")}>
-                    {t("integrations.tab.keys")}
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigateHash("api-keys")}>
+                    {t("nav.apiKeys")}
                   </button>
                 </div>
               )}

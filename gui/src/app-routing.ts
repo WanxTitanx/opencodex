@@ -14,6 +14,7 @@ export type Page =
   | "remote"
   | "headroom"
   | "codex-set"
+  | "api-keys"
   | "integrations";
 
 export const VALID_PAGES = new Set<Page>([
@@ -28,6 +29,7 @@ export const VALID_PAGES = new Set<Page>([
   "remote",
   "headroom",
   "codex-set",
+  "api-keys",
   "integrations",
 ]);
 
@@ -49,11 +51,14 @@ export function readPageFromHash(hash?: string): Page {
   if (pageId === ("combos" as Page)
     || pageId === ("routing" as Page)
     || pageId === ("lab" as Page)) return "models";
+  // Legacy: API access was the Keys tab of Integrations and, before that, the
+  // #api page. It is a top-level page now, so both spellings resolve to it —
+  // the resolver below rewrites the hash to the canonical one.
+  if (pageId === ("api" as Page) || raw === "integrations/keys") return "api-keys";
   // Legacy integration pages now live below one Integrations route. Returning
   // the destination page here keeps the initial hook state aligned until the
   // resolver replaces the hash with the exact nested destination.
-  if (pageId === ("api" as Page)
-    || pageId === ("claude" as Page)
+  if (pageId === ("claude" as Page)
     || pageId === ("grok" as Page)) return "integrations";
   return VALID_PAGES.has(pageId) ? pageId : "dashboard";
 }
@@ -86,7 +91,6 @@ export const DASHBOARD_UPDATE_HASH = "dashboard/update";
  * here or App normalization strips it before Claude can read it.
  */
 export const INTEGRATION_TAB_HASHES = [
-  "integrations/keys",
   "integrations/codex",
   "integrations/claude",
   "integrations/claude/desktop",
@@ -156,8 +160,11 @@ export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
     return { page: "models", replaceTo: "models/compatibility" };
   }
 
-  /* Legacy top-level integration pages. */
-  if (rawHash === "api") return { page: "integrations", replaceTo: "integrations/keys" };
+  /* API keys left the Integrations tab strip for a page of their own. The old
+     tab hash and the older top-level hash both land there, passively replaced
+     so a bookmark never traps Back on a URL the router corrects anyway. */
+  if (rawHash === "api") return { page: "api-keys", replaceTo: "api-keys" };
+  if (rawHash === "integrations/keys") return { page: "api-keys", replaceTo: "api-keys" };
   if (rawHash === "claude") return { page: "integrations", replaceTo: "integrations/claude" };
   if (rawHash === "grok") return { page: "integrations", replaceTo: "integrations/grok" };
 

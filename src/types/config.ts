@@ -258,6 +258,19 @@ export interface OcxCustomModel {
 }
 
 /**
+ * Rolling-window spend limits for one data-plane key, in USD. Each window is
+ * measured from now backwards (24h / 7d / 30d); a value of 0 or an absent
+ * field means that window is unlimited. Estimated spend is compared at
+ * admission only — a request already running when it crosses the limit
+ * completes normally.
+ */
+export interface OcxApiKeyQuota {
+  dailyUsd?: number;
+  weeklyUsd?: number;
+  monthlyUsd?: number;
+}
+
+/**
  * A generated `ocx_` data-plane key. `key` is the secret itself and never leaves
  * the server except in the one-time POST /api/keys response; every other surface
  * sees only the masked prefix.
@@ -268,6 +281,13 @@ export interface OcxApiKeyEntry {
   key: string;
   createdAt: string;
   pendingRotation?: OcxPendingApiKeyRotation;
+  /** Per-window spend limits; absent or all-zero means unlimited. */
+  quota?: OcxApiKeyQuota;
+  /**
+   * ISO instant of the last quota reset. Spend before this instant is ignored
+   * by every window; absent means no reset has ever run.
+   */
+  quotaResetAt?: string;
   /**
    * Resolved provider names this key may reach. Absent or empty means every
    * provider, which is what every existing key has, so adding the field

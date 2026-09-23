@@ -112,7 +112,7 @@ test("API key fetch and session cache retain incomplete metadata even without at
   const node = <ApiKeys apiBase="/keys" />;
   await mount(node);
   expect(host.textContent).toContain(warning);
-  const cached = readSessionListCache<Record<string, unknown>>("ocx.apikeys.list.v2:/keys");
+  const cached = readSessionListCache<Record<string, unknown>>("ocx.apikeys.list.v3:/keys");
   expect(cached).toMatchObject({ ...partial, keys: [] });
   expect(cached).not.toHaveProperty("attributionSince");
   await remountFromCache(node);

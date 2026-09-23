@@ -191,6 +191,11 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // untranslated `~$`); the templates are pure placeholders on purpose.
   "logs.cost.approximate",
   "logs.cost.lowerBound",
+  // "Headroom" is the sidecar's feature name; every locale keeps it verbatim, including
+  // the "Headroom URL" field label zh also ships in English.
+  "nav.headroom",
+  "headroom.title",
+  "headroom.baseUrl",
 ]);
 
 test("zh-TW ships no untranslated English placeholders beyond the intentional allowlist", async () => {

@@ -67,6 +67,7 @@ export type {
   StorageCleanupPolicy,
   OcxCustomModel,
   OcxApiKeyEntry,
+  OcxApiKeyQuota,
   OcxClientIntegrationsConfig,
   OcxConfigRebaseProvenance,
   OcxHubConfig,

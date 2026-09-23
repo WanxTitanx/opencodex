@@ -647,6 +647,37 @@ remain in the response for compatibility with older GUI and CLI clients. A succe
 scan reports `false`, `0`, `false`, and `0`; clients must not interpret those fields as evidence that
 `managementUsageMaxReadBytes` was raised or that a bounded tail was selected.
 
+### API-key spend quotas
+
+`src/server/api-key-quota.ts` tracks each configured data-plane key's estimated USD spend in
+sparse per-minute buckets over rolling 24-hour, 7-day and 30-day windows. It warms once from
+`usage.jsonl` through the cooperative ledger scanner — the live observer in `src/usage/log.ts`
+is registered before the scan so a row arriving mid-warm is applied once and skipped by
+`requestId` inside the scan — then follows that observer for live rows. Only `configured`
+admission rows count: the scan gates on currently configured `apiKeyId`s while the observer
+accepts any configured-admission row with a non-empty id, so a key created after warm-up is
+attributed immediately; `reconcileApiKeyQuotaKeys` still drops ids that leave the config. The
+environment token and loopback requests never consume or get gated by a configured key's
+quota, and a row with no resolvable price adds zero dollars and increments the unpriced
+counter. Buckets prune lazily, at most once per key per minute; correctness never depends on
+pruning because window reads ignore anything older than 30 days. Cost reconstruction shares
+`src/usage/entry-cost.ts` with the management usage views, so a key's spend and the ledger's
+displayed cost are one estimate.
+
+`apiKeyQuotaDenial` runs at every inference admission site in `src/server/index/serve-options.ts`:
+a key with no non-zero limit returns before warm-up starts, and otherwise the daily, weekly and
+monthly windows are checked in that order with the first exceeded one answering 429
+`api_key_quota_exceeded` carrying `window`, `limitUsd`, `spentUsd` and `Retry-After`. A request
+that crosses a limit completes; the refusal lands on the next request. `POST /api/keys/quota/reset`
+stamps `quotaResetAt` and clears the buckets while keeping the configured limits.
+
+`src/server/index/public-model-list.ts` builds the public rows `/v1/models` serializes — the
+response bytes are unchanged — and carries each row's internal `provider/modelId` destination
+for scope checks. `resolveAdmissionModelScope` applies the same universe to filter `/v1/models`,
+the persisted `/v1/catalog` body, and inference admission for a scoped key; a scoped catalog
+whose stored body cannot be parsed or has no `models` array is refused 503
+`catalog_unfilterable` rather than served unfiltered.
+
 > Decision record: [ADR-0079](decisions/ADR-0079-usage-accounting.md)
 
 ## Opt-in aggregate request metrics

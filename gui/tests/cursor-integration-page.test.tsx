@@ -167,10 +167,10 @@ test("credential mode links to the API Keys tab instead of inventing a key", asy
   expect(text).toContain("One of your opencodex API keys");
   const copies = Array.from(container.querySelectorAll("button")).filter(button => (button.textContent ?? "").trim() === "Copy");
   expect(copies.length).toBe(1);
-  const keysButton = Array.from(container.querySelectorAll("button")).find(button => (button.textContent ?? "").trim() === "API Keys");
+  const keysButton = Array.from(container.querySelectorAll("button")).find(button => (button.textContent ?? "").trim() === "API keys");
   expect(keysButton).toBeDefined();
   await act(async () => { keysButton!.click(); });
-  expect(testWindow.location.hash).toBe("#integrations/keys");
+  expect(testWindow.location.hash).toBe("#api-keys");
 });
 
 test("Copy writes the value to the clipboard and flips the label", async () => {

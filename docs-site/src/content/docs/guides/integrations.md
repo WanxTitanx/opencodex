@@ -153,15 +153,17 @@ opencodex reads these from its own environment. If your gateway runs with a prof
 or a relocated home, start opencodex with the same variables set, or it will
 correctly follow a different installation.
 
-## The other five surfaces are not switches
+## The other four surfaces are not switches
 
-**API Keys** manages opencodex's own credentials and is not a client at all. **Codex
+**Codex
 CLI** is wired by the proxy service itself — starting opencodex applies it, stopping it
 restores native routing — so there is nothing to toggle per-file. **Claude** keeps its
 own enable flag and Desktop's Save/Apply flow, and **Grok Build** keeps its
 select-then-apply model fence. Those semantics predate this feature and are unchanged.
 **Cursor** writes nothing at all: its tab shows detection, the gateway values, and the last
-request seen, and the rest happens inside Cursor Private Inference.
+request seen, and the rest happens inside Cursor Private Inference. API keys, which
+manage opencodex's own credentials rather than a client, have their own **API keys**
+sidebar page.
 
 ## Rollback
 

@@ -24,7 +24,7 @@ runs helper features around provider requests.
 | `codexNativeSteering?` | `boolean` | `false` | Experimental, native-only mid-turn steering on the Responses WebSocket endpoint. Requires `websockets: true`, a compatible upstream/client, and a pinned account/model/tool surface. Validated generation settings can change in explicit saved-result continuations. Does not enable translated models or HTTP fallback. See [native steering](/guides/codex-integration/#experimental-native-mid-turn-steering). |
 | `codexNativeInjection?` | `boolean` | `false` | Experimental saved function-result injection on compatible native multi-agent WebSocket turns. Requires `websockets: true`, explicit `multi_agent.enabled`, and an eligible provider. Separate from steering; no automatic tool rerun or recovery create. See [native injection](/guides/codex-integration/#experimental-native-function-result-injection). |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
-| `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` data-plane admission credentials on non-loopback binds. They do not authorize management APIs; management access uses the separate credential documented in the [management reference](/reference/management-api/). Dashboard-managed. |
+| `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_data_…` data-plane admission credentials on non-loopback binds. Each entry carries `id`, `name`, `key`, `createdAt`, optional `quota` (`dailyUsd` / `weeklyUsd` / `monthlyUsd`), optional `quotaResetAt`, and optional `allowedProviders` / `allowedModels` scope lists — see [API keys](#api-keys). They do not authorize management APIs; management access uses the separate credential documented in the [management reference](/reference/management-api/). Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
 | `usageLedgerMaxBytes?` | `number` | unset | Opt-in ceiling in bytes for `usage.jsonl`. Absent means the request history grows without limit, which stays the default. See [usage history size](#usage-history-size). |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Cap in MiB for evictable app-owned logs, caches, blobs, and continuation payloads. Range 64–4096; not an RSS cap. |
@@ -240,6 +240,50 @@ Any proxy admission secret placed in those provider headers is removed before fo
 A `0.0.0.0` bind exposes the proxy and configured provider access to the LAN. Use it only on trusted
 networks with a strong token.
 :::
+
+### API keys
+
+The **API keys** sidebar page issues and manages `apiKeys[]` entries — per-key names, USD spend
+quotas, model access scopes, and revocation. A generated key is a data-plane credential only: it
+never authorizes `/api/*` management routes, which keep their own admin credential.
+
+Each `apiKeys[]` entry supports:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id`, `name`, `key`, `createdAt` | string | Identity and the `ocx_data_…` secret, returned in full only once at creation. |
+| `quota.dailyUsd?` | number | Estimated-cost ceiling over the rolling last 24 hours. |
+| `quota.weeklyUsd?` | number | Estimated-cost ceiling over the rolling last 7 days. |
+| `quota.monthlyUsd?` | number | Estimated-cost ceiling over the rolling last 30 days. |
+| `quotaResetAt?` | string | ISO timestamp written by a quota reset; spend before it does not count. |
+| `allowedProviders?` | string[] | Restrict the key to the listed providers. |
+| `allowedModels?` | string[] | Restrict the key to the listed `provider/modelId` values. |
+
+Quota values are USD amounts estimated from the configured model pricing; `0`, an absent field, or
+an absent `quota` object all mean **unlimited**, and values above `1000000` are rejected. A request
+that crosses a limit still completes — the *next* request is refused with HTTP 429:
+
+```json
+{ "error": { "type": "api_key_quota_exceeded", "window": "daily", "limitUsd": 5, "spentUsd": 5.13 } }
+```
+
+`window` is `daily`, `weekly`, or `monthly` (checked in that order), and the response carries a
+`Retry-After` header estimating when enough spend ages out of the window. Requests for models with
+no configured price count as one request but contribute `$0`. Spend is rebuilt from `usage.jsonl`
+on startup, so history survives restarts — an aggressive
+[`usageLedgerMaxBytes`](#usage-history-size) cap can shorten the reconstructable window. The
+environment token and loopback requests never consume a configured key's quota.
+
+Reset one key's recorded spend with `POST /api/keys/quota/reset {"id": "…"}` or every key's with
+`{"all": true}` — both stamp `quotaResetAt` and leave the configured limits in place. The page also
+offers a reset-all action.
+
+Scope lists filter what the key can see and call: `GET /v1/models` and `GET /v1/catalog` return only
+the allowed entries for a scoped key, and inference requests for anything outside the lists are
+refused. When both lists are set a request must match **both** — the provider list and the model
+list intersect rather than union. A scoped catalog that cannot be filtered is refused with a 503
+`catalog_unfilterable` rather than served unfiltered. Combos are authorized by their member models:
+a key that may call every member may call the combo.
 
 ### Local clients that cannot receive the token
 
