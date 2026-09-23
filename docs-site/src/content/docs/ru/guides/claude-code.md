@@ -435,6 +435,8 @@ id/name; именованный `tool_choice` без имени.
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
 прочие 5xx — `api_error`. `Retry-After` сохраняется.
 
+Ответ Responses с `client_version_too_old` означает, что Anthropic требует версию новее той, которую заявляет встроенный в OpenCodex отпечаток Claude Code. Это не версия подключённого CLI и не проблема аккаунта. Обновите OpenCodex на хосте прокси до сборки с более новым шаблоном Claude Code и перезапустите прокси.
+
 ## Кеширование промптов и расход токенов
 
 **Запросы, маршрутизируемые в Anthropic:** адаптер управляет точками кеширования для

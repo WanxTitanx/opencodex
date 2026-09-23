@@ -49,6 +49,10 @@ context-1m per account. The recovery arm in `src/server/responses/adapter-dispat
 rebuilds and refetches in dario's order (beta flags → effort level → effort
 parameter → max_tokens → long context) inside a bounded per-request budget.
 
+On the Responses path, a Claude Code minimum-version 400 returns `invalid_request_error` with `client_version_too_old` and is not retried: the bundled `claude-cli` fingerprint is the version Anthropic gated. The Messages path rewrites the same gate into an explanation for Anthropic-shaped callers.
+
+Anthropic OAuth 429 handling in `src/oauth/anthropic-routing.ts` scopes a rejected model-family weekly bucket to that family when the unified 5h/7d windows remain available. The scoped cooldown survives later responses without that bucket; unified-window and ordinary rate-limit cooldowns remain account-wide.
+
 ## Local Claude Code account import
 
 `src/oauth/anthropic-import.ts` adopts the installed `claude` CLI's credential

@@ -496,6 +496,8 @@ role, `tool_use_id` 없는 `tool_result`, id/name 없는 `tool_use`, name 없는
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
 그 밖의 5xx는 `api_error`예요. `Retry-After`는 그대로 유지해요.
 
+Responses가 `client_version_too_old`를 반환하면 Anthropic이 OpenCodex에 포함된 Claude Code 지문보다 새로운 버전을 요구하는 것입니다. 연결된 CLI 버전이나 계정 문제는 아닙니다. 프록시 호스트에서 최신 Claude Code 템플릿이 포함된 OpenCodex로 업데이트한 뒤 프록시를 다시 시작하세요.
+
 ## 프롬프트 캐싱과 토큰 사용량
 
 **Anthropic 라우팅 요청:** 어댑터가 도구, 시스템 내용, 끝에서 두 번째 사용자 메시지의 캐시

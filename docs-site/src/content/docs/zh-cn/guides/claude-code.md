@@ -384,6 +384,8 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 413 `request_too_large`、429 `rate_limit_error`、504 `timeout_error`、529 `overloaded_error`，
 其他 5xx 为 `api_error`。`Retry-After` 会保留。
 
+Responses 返回 `client_version_too_old` 表示 Anthropic 要求的 Claude Code 版本高于 OpenCodex 内置指纹声明的版本。这不是已连接 CLI 的版本或账户问题；请在代理主机上更新到包含较新 Claude Code 模板的 OpenCodex 版本，然后重启代理。
+
 ## 提示缓存与 token 用量
 
 **Anthropic 路由请求：**适配器会管理工具、系统内容和倒数第二条用户消息的缓存断点，以及顶层

@@ -433,6 +433,8 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 413 `request_too_large`、429 `rate_limit_error`、504 `timeout_error`、529 `overloaded_error`、
 それ以外の 5xx は `api_error` です。`Retry-After` はそのまま維持します。
 
+Responses が `client_version_too_old` を返す場合、Anthropic が OpenCodex に組み込まれた Claude Code フィンガープリントより新しいバージョンを要求しています。接続中の CLI バージョンやアカウントの問題ではありません。プロキシホストで新しい Claude Code テンプレートを含む OpenCodex に更新し、再起動してください。
+
 ## プロンプトキャッシュとトークン使用量
 
 **Anthropic ルーティングリクエスト:** アダプターがツール、システム内容、最後から 2 番目のユーザーメッセージのキャッシュ

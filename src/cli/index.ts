@@ -631,7 +631,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     void (async () => {
       let shutdownSucceeded = false;
       try {
-        shutdownSucceeded = await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000);
+        shutdownSucceeded = await drainAndShutdown(server, config.shutdownTimeoutMs ?? 90_000);
       } finally {
         const restored = syncCleanup(); // idempotent (cleaned-guard); also re-run by process.on("exit")
         process.exit(restored && shutdownSucceeded ? 0 : 1);

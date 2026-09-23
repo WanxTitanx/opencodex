@@ -26,7 +26,9 @@ protège pas contre l'application des règles du fournisseur.
 Comportement lorsque cette option est activée :
 
 - Un **429** en amont place le compte en temporisation selon `Retry-After` lorsqu'il est présent, ou selon un délai de repli,
-  efface ses affinités et peut faire basculer la requête vers un autre compte admissible, dans les limites prévues.
+  efface ses affinités et peut faire basculer la requête vers un autre compte admissible, dans les limites prévues. Si seule
+  une fenêtre hebdomadaire propre à un modèle est épuisée alors que les fenêtres unifiées 5h/7j restent disponibles,
+  cette temporisation ne concerne que la famille du modèle ; les autres familles peuvent continuer à utiliser le compte.
 - L'affinité est **locale au processus** et disparaît au redémarrage du proxy.
 - Les erreurs d'identification **401/403** mettent le compte en quarantaine (`needsReauth`) afin de l'exclure de la
   sélection jusqu'à sa réauthentification.
@@ -568,6 +570,8 @@ Sur l’adaptateur Anthropic prévu, les blocs signés non masqués (y compris t
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
 autre 5xx `api_error`. `Retry-After` est conservé.
+
+Une réponse Responses `client_version_too_old` signifie qu’Anthropic exige une version plus récente que celle annoncée par l’empreinte Claude Code intégrée à OpenCodex. Ce n’est pas la version du CLI connecté ni un problème de compte : mettez OpenCodex à jour sur l’hôte du proxy vers une version avec un modèle Claude Code plus récent, puis redémarrez le proxy.
 
 ## Mise en cache des prompts et utilisation des jetons
 

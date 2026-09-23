@@ -1,5 +1,5 @@
 {
-  "_version": "2.1.278",
+  "_version": "2.1.280",
   "_captured": "2026-09-19T00:23:46.481Z",
   "_source": "dario-bundled (MIT)",
   "agent_identity": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
@@ -41,7 +41,7 @@
   ],
   "header_values": {
     "accept": "application/json",
-    "user-agent": "claude-cli/2.1.278 (external, sdk-cli)",
+    "user-agent": "claude-cli/2.1.280 (external, sdk-cli)",
     "x-stainless-lang": "js",
     "x-stainless-package-version": "0.112.1",
     "x-stainless-retry-count": "0",

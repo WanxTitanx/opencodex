@@ -20,7 +20,9 @@ import {
   noteClaudeMaxTokensCap,
   orderClaudeBodyFields,
   orderClaudeHeaders,
+  describeClaudeClientVersionGate,
   parseClaudeBetaRejection,
+  parseClaudeClientVersionGate,
   parseClaudeEffortRejection,
   parseClaudeMaxTokensRejection,
   isClaudeContext1mUnavailable,
@@ -252,6 +254,7 @@ describe("synthesized body", () => {
 describe("headers", () => {
   test("static headers carry the captured CC identity", () => {
     const h = claudeStaticHeaders("2.1.278");
+    expect(CC_TEMPLATE_VERSION).toBe("2.1.280");
     expect(h["user-agent"]).toBe(`claude-cli/${CC_TEMPLATE_VERSION} (external, sdk-cli)`);
     expect(h["x-stainless-lang"]).toBe("js");
     expect(h["x-app"]).toBe("cli");
@@ -382,6 +385,17 @@ describe("capability rejections", () => {
     noteClaudeContext1mUnavailable("acct-ctx");
     expect(isClaudeContext1mUnavailable("acct-ctx")).toBe(true);
     expect(isClaudeContext1mUnavailable("acct-other")).toBe(false);
+  });
+
+  test("client-version gate parses and describes the real cause", () => {
+    const body = JSON.stringify({ error: { type: "invalid_request_error", message: "Claude Code 2.1.278 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude Code SDK." } });
+    const gate = parseClaudeClientVersionGate(body);
+    expect(gate).toEqual({ claimed: "2.1.278", required: "2.1.280" });
+    expect(parseClaudeClientVersionGate("unrelated 400")).toBeNull();
+    const described = describeClaudeClientVersionGate(gate!, "claude-opus-5-5");
+    expect(described).toContain("claude-opus-5-5");
+    expect(described).toContain("2.1.280");
+    expect(described).toContain("2.1.278");
   });
 });
 

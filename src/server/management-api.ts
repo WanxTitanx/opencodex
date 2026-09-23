@@ -401,7 +401,7 @@ export async function handleManagementAPI(
     setTimeout(async () => {
       let shutdownSucceeded = false;
       try {
-        shutdownSucceeded = await drainAndShutdown(undefined, config.shutdownTimeoutMs ?? 5000);
+        shutdownSucceeded = await drainAndShutdown(undefined, config.shutdownTimeoutMs ?? 90_000);
       } catch {
         console.warn("[opencodex] shutdown drain failed");
       }

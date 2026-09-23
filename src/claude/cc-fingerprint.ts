@@ -21,7 +21,7 @@
  *   - cache breakpoints: 2 system + last-2 user messages, client's own ttl honored
  *
  * Template data lives in ./cc-fingerprint-data.json (extracted from dario's bundled
- * capture of Claude Code 2.1.278).
+ * capture of Claude Code 2.1.280).
  */
 import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -32,7 +32,7 @@ import TEMPLATE_DATA from "./cc-fingerprint-data.json";
 
 type Rec = Record<string, unknown>;
 
-// ── Template data (dario cc-template-data.json, CC 2.1.278 bundled capture) ──
+// ── Template data (dario cc-template-data.json, CC 2.1.280 bundled capture) ──
 const TEMPLATE = TEMPLATE_DATA as {
   _version: string;
   agent_identity: string;
@@ -723,6 +723,16 @@ export function stripRejectedClaudeBetas(beta: string, accountKey: string | unde
   const rejected = rejectedClaudeBetas.get(accountKey);
   if (!rejected || rejected.size === 0) return beta;
   return beta.split(",").filter((f) => !rejected.has(f.trim().toLowerCase())).join(",");
+}
+
+export function parseClaudeClientVersionGate(bodyText: string): { claimed: string; required: string } | null {
+  const m = bodyText.match(/Claude Code ([\d.]+) does not support this model;\s*version ([\d.]+) or newer is required/i);
+  return m ? { claimed: m[1]!, required: m[2]! } : null;
+}
+
+export function describeClaudeClientVersionGate(g: { claimed: string; required: string }, model: string): string {
+  return `${model} requires Claude Code ${g.required} or newer, but OpenCodex's bundled fingerprint claims ${g.claimed}. `
+    + `Update OpenCodex to a build with a current Claude Code template and restart the proxy.`;
 }
 
 // ── Per-account context-1m availability (dario context1mUnavailable) ──

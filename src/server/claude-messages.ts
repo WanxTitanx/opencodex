@@ -23,7 +23,7 @@ import { resolveAlias, claudeCodeNativeAlias } from "../claude/alias";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
-import { forwardClaudeClientIdentityHeaders } from "../claude/cc-fingerprint";
+import { describeClaudeClientVersionGate, forwardClaudeClientIdentityHeaders, parseClaudeClientVersionGate } from "../claude/cc-fingerprint";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
 import {
   applyReplayRefusalClientHeaders,
@@ -286,7 +286,7 @@ export function tapAnthropicSseForLog(
         .map(l => sseFieldValue(l, "data"))
         .filter((v): v is string => v !== null)
         .join("");
-      if (!dataLine) continue;
+      if (!dataLine || (!dataLine.includes('"message_start"') && !dataLine.includes('"message_delta"'))) continue;
       let data: unknown;
       try { data = JSON.parse(dataLine); } catch { continue; }
       if (!isRec(data)) continue;
@@ -1009,8 +1009,10 @@ async function handleClaudeMessagesWithBudget(
         if (text) message = `upstream error (${response.status}): ${text.slice(0, 400)}`;
       }
     } catch { /* keep fallback message */ }
+    const versionGate = response.status === 400 ? parseClaudeClientVersionGate(message) : null;
+    if (versionGate) message = describeClaudeClientVersionGate(versionGate, requestedModel || "this model");
     const upstreamRetryAfter = response.headers.get("retry-after");
-    const retryAfter = replayRefusal
+    const retryAfter = replayRefusal || versionGate
       ? undefined
       : resolveClientRetryAfter({
           status: response.status,
@@ -1038,6 +1040,8 @@ async function handleClaudeMessagesWithBudget(
     if (retryAfter) outHeaders.set("Retry-After", retryAfter);
     else if (transient) outHeaders.set("Retry-After", "2");
     if (replayRefusal) applyReplayRefusalClientHeaders(outHeaders);
+    const upstreamRequestId = versionGate ? response.headers.get("request-id") : null;
+    if (upstreamRequestId) outHeaders.set("request-id", upstreamRequestId);
     const out = new Response(JSON.stringify(anthropicErrorBody(
       outStatus,
       message,

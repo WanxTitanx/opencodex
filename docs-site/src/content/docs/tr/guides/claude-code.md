@@ -31,7 +31,9 @@ Etkinleştirildiğinde operasyonel sözleşme:
 
 - Yukarı akıştan gelen **429**, varsa `Retry-After` (yoksa varsayılan bir geri
   çekilme) kullanarak o hesabı soğutur, bağlılıklarını temizler ve aynı istek
-  içinde uygun başka bir hesaba dönebilir (sınırlı).
+  içinde uygun başka bir hesaba dönebilir (sınırlı). Bir modelin haftalık kovası
+  tek başına tükenmişse ve birleşik 5 saat/7 gün pencerelerinde kapasite varsa,
+  soğuma yalnızca o model ailesi için geçerlidir; diğer aileler hesabı kullanabilir.
 - Bağlılık **işleme özeldir (process-local)** (proxy yeniden başlatıldığında
   kaybolur).
 - **401/403** kimlik bilgisi hataları hesabı karantinaya alır (`needsReauth`),
@@ -629,6 +631,8 @@ kimlik/ad içermeyen `tool_use`; ad içermeyen adlandırılmış `tool_choice`.
 `conflict_error`, 413 `request_too_large`, 429 `rate_limit_error`, 504
 `timeout_error`, 529 `overloaded_error`, diğer 5xx `api_error`. `Retry-After`
 korunur.
+
+Responses `client_version_too_old` döndürürse Anthropic, OpenCodex'in paketlenmiş Claude Code parmak izinin bildirdiğinden daha yeni bir sürüm istiyor demektir. Bu, bağlı CLI sürümü veya hesap sorunu değildir. Proxy ana bilgisayarında daha yeni Claude Code şablonunu içeren bir OpenCodex derlemesine güncelleyin ve proxy'yi yeniden başlatın.
 
 ## İstem önbellekleme ve token kullanımı
 

@@ -39,7 +39,7 @@ import { retainedUtf8Bytes } from "../lib/admission";
  * headers without this module importing anything from the server layer -- and so a test can
  * hand it a plain `new Headers({...})`.
  */
-export type AnthropicRateLimitHeaders = Pick<Headers, "get">;
+export type AnthropicRateLimitHeaders = Pick<Headers, "get" | "entries">;
 
 const PROVIDER = "anthropic";
 /** Backoff only when upstream supplies no usable deadline. */
@@ -75,10 +75,16 @@ export interface AnthropicAccountPoolConfig {
  * `retry-after` would report a drained five-hour window as request-rate throttling.
  */
 type AnthropicCooldownSource = "retry-after" | "reset-derived" | "default";
+type AnthropicModelFamily = "fable" | "opus" | "sonnet" | "haiku";
 
-interface AccountHealth {
+interface AccountCooldown {
   cooldownUntil: number;
   cooldownSource: AnthropicCooldownSource;
+}
+
+interface AccountHealth {
+  accountWide?: AccountCooldown;
+  familyCooldowns?: Partial<Record<AnthropicModelFamily, AccountCooldown>>;
 }
 
 interface AffinityEntry {
@@ -148,33 +154,117 @@ function parseRetryAfterMs(value: string | null | undefined, now: number): numbe
   return delayUntil(Date.parse(text), now);
 }
 
-/** Only rejected windows constrain recovery; all must reopen, so take the latest reset. */
+function anthropicModelFamily(modelId: string | null | undefined): AnthropicModelFamily | null {
+  const normalized = modelId?.toLowerCase() ?? "";
+  return (["fable", "opus", "sonnet", "haiku"] as const).find(family => normalized.includes(family)) ?? null;
+}
+
+function parseHeaderResetAt(value: string | null, now: number): number | undefined {
+  const seconds = Number(value?.trim());
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  const resetAt = seconds * 1000;
+  return delayUntil(resetAt, now) === undefined ? undefined : resetAt;
+}
+
 function parseRateLimitResetMs(headers: AnthropicRateLimitHeaders | null | undefined, now: number): number | undefined {
   if (!headers) return undefined;
   let latest: number | undefined;
   for (const window of ["5h", "7d"] as const) {
     if (headers.get(`anthropic-ratelimit-unified-${window}-status`)?.trim() !== "rejected") continue;
-    const resetSeconds = Number(headers.get(`anthropic-ratelimit-unified-${window}-reset`)?.trim());
-    if (!Number.isFinite(resetSeconds) || resetSeconds <= 0) continue;
-    const resetAt = resetSeconds * 1000;
-    if (delayUntil(resetAt, now) === undefined) continue;
-    if (latest === undefined || resetAt > latest) latest = resetAt;
+    const resetAt = parseHeaderResetAt(headers.get(`anthropic-ratelimit-unified-${window}-reset`), now);
+    if (resetAt !== undefined && (latest === undefined || resetAt > latest)) latest = resetAt;
   }
-  if (latest === undefined) return undefined;
-  return latest - now;
+  return latest === undefined ? undefined : latest - now;
+}
+
+function familyScopedCooldown(
+  headers: AnthropicRateLimitHeaders | null | undefined,
+  retryAfterHeader: string | null | undefined,
+  modelId: string | null | undefined,
+  now: number,
+): { family: AnthropicModelFamily; cooldown: AccountCooldown } | null {
+  const family = anthropicModelFamily(modelId);
+  if (!headers || !family) return null;
+  const unifiedRejected = (["5h", "7d"] as const).some(window => {
+    const utilization = Number(headers.get(`anthropic-ratelimit-unified-${window}-utilization`));
+    return Number.isFinite(utilization) && utilization >= 0.99;
+  });
+  if (unifiedRejected) return null;
+
+  const buckets = new Map<string, { utilization?: number; status?: string; resetAt?: number }>();
+  for (const [header, value] of headers.entries()) {
+    const utilizationMatch = header.match(/^anthropic-ratelimit-unified-7d_([a-z0-9-]+)-utilization$/i);
+    const statusMatch = header.match(/^anthropic-ratelimit-unified-7d_([a-z0-9-]+)-status$/i);
+    const resetMatch = header.match(/^anthropic-ratelimit-unified-7d_([a-z0-9-]+)-reset$/i);
+    const match = utilizationMatch ?? statusMatch ?? resetMatch;
+    if (!match?.[1]) continue;
+    const bucket = match[1].toLowerCase();
+    const current = buckets.get(bucket) ?? {};
+    if (utilizationMatch) {
+      const utilization = Number(value);
+      if (Number.isFinite(utilization) && utilization >= 0) current.utilization = utilization;
+    } else if (statusMatch) {
+      current.status = value.trim().toLowerCase();
+    } else if (resetMatch) {
+      current.resetAt = parseHeaderResetAt(value, now);
+    }
+    buckets.set(bucket, current);
+  }
+
+  const claim = headers.get("anthropic-ratelimit-unified-representative-claim")?.trim().toLowerCase() ?? "";
+  const exhausted = [...buckets.entries()].filter(([bucket, value]) => {
+    if (value.utilization === undefined || value.utilization < 0.99) return false;
+    const bucketFamily = anthropicModelFamily(bucket);
+    return bucketFamily === family
+      || (bucket === "oi" && family === "fable")
+      || value.status === "rejected"
+      || (bucket === "oi" && claim.endsWith("_overage_included"));
+  });
+  if (exhausted.length === 0) return null;
+
+  const globalWeeklyReset = parseHeaderResetAt(headers.get("anthropic-ratelimit-unified-7d-reset"), now);
+  const resetAt = exhausted.reduce<number | undefined>((latest, [, value]) => {
+    const candidate = value.resetAt ?? globalWeeklyReset;
+    return candidate !== undefined && (latest === undefined || candidate > latest) ? candidate : latest;
+  }, undefined);
+  const retryAfter = parseRetryAfterMs(retryAfterHeader, now);
+  return {
+    family,
+    cooldown: resetAt !== undefined
+      ? { cooldownUntil: resetAt, cooldownSource: "reset-derived" }
+      : retryAfter !== undefined
+        ? { cooldownUntil: now + retryAfter, cooldownSource: "retry-after" }
+        : { cooldownUntil: now + DEFAULT_COOLDOWN_MS, cooldownSource: "default" },
+  };
+}
+
+function pruneAnthropicAccountHealth(accountId: string, now: number): void {
+  const health = upstreamHealth.get(accountId);
+  if (!health) return;
+  if (health.accountWide && health.accountWide.cooldownUntil <= now) delete health.accountWide;
+  for (const [family, cooldown] of Object.entries(health.familyCooldowns ?? {}) as [AnthropicModelFamily, AccountCooldown][]) {
+    if (cooldown.cooldownUntil <= now) delete health.familyCooldowns?.[family];
+  }
+  if (!health.accountWide && Object.keys(health.familyCooldowns ?? {}).length === 0) upstreamHealth.delete(accountId);
 }
 
 export function getAnthropicAccountHealthSnapshot(
   accountId: string,
   now = Date.now(),
-): { cooldownUntil?: number; cooldownSource?: AccountHealth["cooldownSource"] } | null {
+  modelId?: string | null,
+): { cooldownUntil?: number; cooldownSource?: AnthropicCooldownSource } | null {
   const entry = upstreamHealth.get(accountId);
   if (!entry) return null;
-  if (entry.cooldownUntil <= now) {
-    upstreamHealth.delete(accountId);
-    return null;
-  }
-  return { cooldownUntil: entry.cooldownUntil, cooldownSource: entry.cooldownSource };
+  const family = anthropicModelFamily(modelId);
+  const accountWide = entry.accountWide;
+  const familyCooldown = family ? entry.familyCooldowns?.[family] : undefined;
+  const cooldown = accountWide && accountWide.cooldownUntil > now
+    ? accountWide
+    : familyCooldown && familyCooldown.cooldownUntil > now
+      ? familyCooldown
+      : null;
+  pruneAnthropicAccountHealth(accountId, now);
+  return cooldown ? { ...cooldown } : null;
 }
 
 export function clearAnthropicAccountCooldown(accountId: string): boolean {
@@ -182,16 +272,23 @@ export function clearAnthropicAccountCooldown(accountId: string): boolean {
 }
 
 export function sweepExpiredAnthropicRoutingHealth(now = Date.now()): number {
-  let removed = 0;
-  for (const [accountId, health] of upstreamHealth) {
-    if (health.cooldownUntil > now) continue;
-    upstreamHealth.delete(accountId);
-    removed += 1;
-  }
-  return removed;
+  const before = upstreamHealth.size;
+  for (const accountId of upstreamHealth.keys()) pruneAnthropicAccountHealth(accountId, now);
+  return before - upstreamHealth.size;
 }
 
-/** Test / logout helper. */
+function storeAnthropicAccountCooldown(accountId: string, cooldown: AccountCooldown, family?: AnthropicModelFamily): void {
+  const previous = upstreamHealth.get(accountId) ?? {};
+  if (!family) {
+    upstreamHealth.set(accountId, { ...previous, accountWide: cooldown });
+    return;
+  }
+  upstreamHealth.set(accountId, {
+    ...previous,
+    familyCooldowns: { ...previous.familyCooldowns, [family]: cooldown },
+  });
+}
+
 export function clearAnthropicAccountPoolState(): void {
   upstreamHealth.clear();
   sessionAffinity.clear();
@@ -203,8 +300,15 @@ export function anthropicSessionAffinitySizeForTests(): number {
   return sessionAffinity.size;
 }
 
-function isCooled(accountId: string, now: number): boolean {
-  return getAnthropicAccountHealthSnapshot(accountId, now) !== null;
+function isCooled(accountId: string, now: number, modelId?: string | null): boolean {
+  return getAnthropicAccountHealthSnapshot(accountId, now, modelId) !== null;
+}
+
+function isFamilyCooled(accountId: string, now: number, modelId?: string | null): boolean {
+  const family = anthropicModelFamily(modelId);
+  if (!family) return false;
+  pruneAnthropicAccountHealth(accountId, now);
+  return (upstreamHealth.get(accountId)?.familyCooldowns?.[family]?.cooldownUntil ?? 0) > now;
 }
 
 function fiveHourKnown(accountId: string): boolean {
@@ -235,28 +339,54 @@ function exhausted5h(accountId: string): boolean {
   return fiveHourKnown(accountId) && fiveHourScore(accountId) >= 100;
 }
 
-function hasKnownUsage(config: OcxConfig, accountId: string): boolean {
-  const window = anthropicQuotaWindow(anthropicAccountPoolConfig(config));
-  switch (window) {
-    case "five-hour": return fiveHourKnown(accountId);
-    case "weekly": return weeklyKnown(accountId);
-    case "max-utilization": return fiveHourKnown(accountId) || weeklyKnown(accountId);
-  }
+function modelQuotaWindowExhausted(accountId: string, modelId?: string | null): boolean {
+  const quota = getCachedProviderAccountQuota(PROVIDER, accountId);
+  const family = anthropicModelFamily(modelId);
+  const unified = [quota?.fiveHourPercent, quota?.weeklyPercent, quota?.monthlyPercent]
+    .some(percent => typeof percent === "number" && percent >= 100);
+  if (unified) return true;
+  return (quota?.customWindows ?? []).some(window => {
+    if (typeof window.percent !== "number" || window.percent < 100) return false;
+    const label = window.label.toLowerCase();
+    return !family || anthropicModelFamily(label) === family || (family === "fable" && label.includes("oi"));
+  });
 }
 
-function usageScore(config: OcxConfig, accountId: string): number {
+function modelFamilyUsageScore(accountId: string, modelId?: string | null): number | null {
+  const family = anthropicModelFamily(modelId);
+  if (!family) return null;
+  const windows = getCachedProviderAccountQuota(PROVIDER, accountId)?.customWindows ?? [];
+  const percents = windows
+    .filter(window => anthropicModelFamily(window.label) === family
+      || (family === "fable" && window.label.toLowerCase().includes("oi")))
+    .map(window => window.percent)
+    .filter((percent): percent is number => typeof percent === "number" && Number.isFinite(percent));
+  return percents.length === 0 ? null : Math.max(...percents);
+}
+
+function hasKnownUsage(config: OcxConfig, accountId: string, modelId?: string | null): boolean {
   const window = anthropicQuotaWindow(anthropicAccountPoolConfig(config));
-  switch (window) {
-    case "five-hour": return fiveHourScore(accountId);
-    case "weekly": return weeklyScore(accountId);
-    case "max-utilization": {
-      const scores = [
+  const known = window === "five-hour" ? fiveHourKnown(accountId)
+    : window === "weekly" ? weeklyKnown(accountId)
+      : fiveHourKnown(accountId) || weeklyKnown(accountId);
+  return known || modelFamilyUsageScore(accountId, modelId) !== null;
+}
+
+function usageScore(config: OcxConfig, accountId: string, modelId?: string | null): number {
+  const window = anthropicQuotaWindow(anthropicAccountPoolConfig(config));
+  const known = window === "five-hour" ? fiveHourKnown(accountId)
+    : window === "weekly" ? weeklyKnown(accountId)
+      : fiveHourKnown(accountId) || weeklyKnown(accountId);
+  const score = window === "five-hour" ? fiveHourScore(accountId)
+    : window === "weekly" ? weeklyScore(accountId)
+      : Math.max(
         ...(fiveHourKnown(accountId) ? [fiveHourScore(accountId)] : []),
         ...(weeklyKnown(accountId) ? [weeklyScore(accountId)] : []),
-      ];
-      return scores.length > 0 ? Math.max(...scores) : UNKNOWN_USAGE_SCORE;
-    }
-  }
+        ...(fiveHourKnown(accountId) || weeklyKnown(accountId) ? [] : [UNKNOWN_USAGE_SCORE]),
+      );
+  const familyScore = modelFamilyUsageScore(accountId, modelId);
+  if (familyScore === null) return score;
+  return known ? Math.max(score, familyScore) : familyScore;
 }
 
 const TOKEN_SKEW_MS = 60_000;
@@ -270,13 +400,13 @@ function isPoolCredentialUsable(accountId: string, now: number): boolean {
   return cred.expires > now + TOKEN_SKEW_MS;
 }
 
-export function getEligibleAnthropicAccounts(now = Date.now()): string[] {
+export function getEligibleAnthropicAccounts(now = Date.now(), modelId?: string | null): string[] {
   const set = getAccountSet(PROVIDER);
   if (!set) return [];
   return set.accounts
     .filter(account =>
       account.needsReauth !== true
-      && !isCooled(account.id, now)
+      && !isCooled(account.id, now, modelId)
       && isPoolCredentialUsable(account.id, now))
     .map(account => account.id);
 }
@@ -355,12 +485,12 @@ export function forgetAnthropicFailoverQuorum(): void {
 }
 
 /** Earliest remaining cooldown among cooled Anthropic accounts, for client Retry-After. */
-export function getAnthropicPoolRetryAfterSeconds(now = Date.now()): number | null {
+export function getAnthropicPoolRetryAfterSeconds(now = Date.now(), modelId?: string | null): number | null {
   const set = getAccountSet(PROVIDER);
   if (!set) return null;
   let earliest: number | null = null;
   for (const account of set.accounts) {
-    const snap = getAnthropicAccountHealthSnapshot(account.id, now);
+    const snap = getAnthropicAccountHealthSnapshot(account.id, now, modelId);
     if (!snap?.cooldownUntil) continue;
     if (earliest === null || snap.cooldownUntil < earliest) earliest = snap.cooldownUntil;
   }
@@ -388,16 +518,16 @@ function compareScoredAccounts(a: ScoredAccount, b: ScoredAccount): number {
   return a.score - b.score || a.fiveHourTieBreak - b.fiveHourTieBreak;
 }
 
-function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: number): string | null {
+function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: number, modelId?: string | null): string | null {
   const window = anthropicQuotaWindow(anthropicAccountPoolConfig(config));
-  const unfiltered = getEligibleAnthropicAccounts(now).filter(id => id !== excludeId);
+  const unfiltered = getEligibleAnthropicAccounts(now, modelId).filter(id => id !== excludeId);
   const available = window === "weekly" ? unfiltered.filter(id => !exhausted5h(id)) : unfiltered;
   const eligible = available.length > 0 ? available : unfiltered;
   if (eligible.length === 0) return null;
   const scored: ScoredAccount[] = eligible.map(accountId => ({
     accountId,
-    hasKnownUsage: hasKnownUsage(config, accountId),
-    score: usageScore(config, accountId),
+    hasKnownUsage: hasKnownUsage(config, accountId, modelId),
+    score: usageScore(config, accountId, modelId),
     fiveHourTieBreak: window === "five-hour" ? 0 : fiveHourScore(accountId),
     // Every window EXCEPT the legacy five-hour default is an explicit opt-in, so
     // known-before-unknown applies to all of them and to none of the default path.
@@ -417,6 +547,7 @@ function pickNextFillFirstAnthropicAccount(
   config: OcxConfig,
   afterId: string,
   eligible: string[],
+  modelId?: string | null,
 ): string | null {
   const window = anthropicQuotaWindow(anthropicAccountPoolConfig(config));
   const available = window === "weekly" ? eligible.filter(id => !exhausted5h(id)) : eligible;
@@ -430,7 +561,7 @@ function pickNextFillFirstAnthropicAccount(
   const startIdx = stableAll.indexOf(afterId);
   if (startIdx < 0) {
     for (const id of ordered) {
-      if (isActiveUnderFillFirstThreshold(config, id)) return id;
+      if (isActiveUnderFillFirstThreshold(config, id, modelId)) return id;
     }
     return ordered[0] ?? null;
   }
@@ -440,7 +571,7 @@ function pickNextFillFirstAnthropicAccount(
     const candidate = stableAll[(startIdx + step) % stableAll.length]!;
     if (!candidates.includes(candidate)) continue;
     if (!fallback) fallback = candidate;
-    if (isActiveUnderFillFirstThreshold(config, candidate)) return candidate;
+    if (isActiveUnderFillFirstThreshold(config, candidate, modelId)) return candidate;
   }
   return fallback ?? ordered[0] ?? null;
 }
@@ -449,16 +580,17 @@ function pickAlternateAnthropicAccount(
   config: OcxConfig,
   excludeId: string,
   now: number,
+  modelId?: string | null,
 ): string | null {
   const strategy = anthropicPoolStrategy(config);
-  const eligible = getEligibleAnthropicAccounts(now).filter(id => id !== excludeId);
+  const eligible = getEligibleAnthropicAccounts(now, modelId).filter(id => id !== excludeId);
   if (strategy === "round-robin") {
     return peekRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, stickyLimitForPool(config));
   }
   if (strategy === "fill-first") {
-    return pickNextFillFirstAnthropicAccount(config, excludeId, eligible);
+    return pickNextFillFirstAnthropicAccount(config, excludeId, eligible, modelId);
   }
-  return pickLowestUsage(config, excludeId, now);
+  return pickLowestUsage(config, excludeId, now, modelId);
 }
 
 function pruneExpiredAffinity(now: number): void {
@@ -496,39 +628,39 @@ function anthropicPoolStrategy(config: OcxConfig): OcxAccountPoolRotationStrateg
   return normalizeAccountPoolStrategy(anthropicAccountPoolConfig(config).strategy);
 }
 
-function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string): boolean {
+function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string, modelId?: string | null): boolean {
   const threshold = anthropicAutoSwitchThreshold(config);
   if (threshold <= 0) return true;
   const window = anthropicQuotaWindow(anthropicAccountPoolConfig(config));
   if (window === "weekly" && exhausted5h(accountId)) return false;
   // Unknown usage must not force fill-first to abandon the active account.
-  if (!hasKnownUsage(config, accountId)) return true;
-  return usageScore(config, accountId) < threshold;
+  if (!hasKnownUsage(config, accountId, modelId)) return true;
+  return usageScore(config, accountId, modelId) < threshold;
 }
 
 /**
  * Fill-first: keep eligible active under threshold; otherwise advance to the next
  * eligible id in stable sorted order after the current active (wrapping).
  */
-function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string | null {
-  const eligible = getEligibleAnthropicAccounts(now);
+function pickFillFirstAnthropicAccount(config: OcxConfig, now: number, modelId?: string | null): string | null {
+  const eligible = getEligibleAnthropicAccounts(now, modelId);
   if (eligible.length === 0) return null;
 
   const set = getAccountSet(PROVIDER);
   const active = set?.activeAccountId;
-  if (active && eligible.includes(active) && isActiveUnderFillFirstThreshold(config, active)) {
+  if (active && eligible.includes(active) && isActiveUnderFillFirstThreshold(config, active, modelId)) {
     return active;
   }
 
   if (!active || !set) {
     const ordered = [...eligible].sort((a, b) => a.localeCompare(b));
     for (const id of ordered) {
-      if (isActiveUnderFillFirstThreshold(config, id)) return id;
+      if (isActiveUnderFillFirstThreshold(config, id, modelId)) return id;
     }
     return ordered[0] ?? null;
   }
 
-  return pickNextFillFirstAnthropicAccount(config, active, eligible);
+  return pickNextFillFirstAnthropicAccount(config, active, eligible, modelId);
 }
 
 /**
@@ -538,12 +670,13 @@ function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string |
 function pickUnboundStrategyAccount(
   config: OcxConfig,
   now: number,
+  modelId?: string | null,
 ): { accountId: string; reason: "round-robin" | "fill-first" } | null {
   const strategy = anthropicPoolStrategy(config);
   if (strategy === "quota") return null;
 
   if (strategy === "round-robin") {
-    const eligible = getEligibleAnthropicAccounts(now);
+    const eligible = getEligibleAnthropicAccounts(now, modelId);
     const limit = stickyLimitForPool(config);
     const picked = peekRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, limit);
     if (!picked) return null;
@@ -551,7 +684,7 @@ function pickUnboundStrategyAccount(
   }
 
   if (strategy === "fill-first") {
-    const picked = pickFillFirstAnthropicAccount(config, now);
+    const picked = pickFillFirstAnthropicAccount(config, now, modelId);
     if (!picked) return null;
     return { accountId: picked, reason: "fill-first" };
   }
@@ -561,12 +694,13 @@ function pickUnboundStrategyAccount(
 
 /**
  * Resolve which Anthropic OAuth account should serve this session.
- * When the pool is disabled, always returns the store's active account.
+ * When the pool is disabled, only a previously parked model family can move off the active account.
  */
 export function resolveAnthropicAccountForSession(
   sessionKey: string | null | undefined,
   config: OcxConfig,
   now = Date.now(),
+  modelId?: string | null,
 ): AnthropicAccountSelection {
   pruneExpiredAffinity(now);
   const set = getAccountSet(PROVIDER);
@@ -579,7 +713,13 @@ export function resolveAnthropicAccountForSession(
   }
 
   if (!isAnthropicAccountPoolEnabled(config)) {
-    return { accountId: set.activeAccountId, reason: "pool-disabled" };
+    if (!isFamilyCooled(set.activeAccountId, now, modelId)) {
+      return { accountId: set.activeAccountId, reason: "pool-disabled" };
+    }
+    const alternate = pickLowestUsage(config, set.activeAccountId, now, modelId);
+    return alternate
+      ? { accountId: alternate, reason: "only-eligible" }
+      : { accountId: null, reason: "all-cooled" };
   }
 
   // A manual choice is a one-dispatch preference, not a lower-priority quota hint.
@@ -589,11 +729,8 @@ export function resolveAnthropicAccountForSession(
       manualPreference = null;
     } else {
       const chosen = manualPreference.accountId;
-      const quota = getCachedProviderAccountQuota(PROVIDER, chosen);
-      const exhausted = [quota?.fiveHourPercent, quota?.weeklyPercent, quota?.monthlyPercent,
-        ...(quota?.customWindows ?? []).map(window => window.percent)]
-        .some(percent => typeof percent === "number" && percent >= 100);
-      if (!exhausted && getEligibleAnthropicAccounts(now).includes(chosen)) {
+      const exhausted = modelQuotaWindowExhausted(chosen, modelId);
+      if (!exhausted && getEligibleAnthropicAccounts(now, modelId).includes(chosen)) {
         return { accountId: chosen, reason: "manual" };
       }
     }
@@ -604,7 +741,7 @@ export function resolveAnthropicAccountForSession(
     const affined = sessionAffinity.get(key);
     if (affined && now - affined.lastUsedAt <= AFFINITY_IDLE_TTL_MS) {
       const stillThere = set.accounts.some(a => a.id === affined.accountId && a.needsReauth !== true);
-      if (stillThere && !isCooled(affined.accountId, now) && isPoolCredentialUsable(affined.accountId, now)) {
+      if (stillThere && !isCooled(affined.accountId, now, modelId) && isPoolCredentialUsable(affined.accountId, now)) {
         return { accountId: affined.accountId, reason: "affinity" };
       }
       sessionAffinity.delete(key);
@@ -617,21 +754,21 @@ export function resolveAnthropicAccountForSession(
   // Round-robin only when there is a real new-session key (or active is unusable).
   if (!key && (strategy === "round-robin" || strategy === "fill-first")) {
     const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
-      && !isCooled(set.activeAccountId, now)
+      && !isCooled(set.activeAccountId, now, modelId)
       && isPoolCredentialUsable(set.activeAccountId, now);
     if (activeOk) {
       return { accountId: set.activeAccountId, reason: "active" };
     }
   }
 
-  const strategyPick = pickUnboundStrategyAccount(config, now);
+  const strategyPick = pickUnboundStrategyAccount(config, now, modelId);
   if (strategyPick) {
     return { accountId: strategyPick.accountId, reason: strategyPick.reason };
   }
 
   const threshold = anthropicAutoSwitchThreshold(config);
   const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
-    && !isCooled(set.activeAccountId, now)
+    && !isCooled(set.activeAccountId, now, modelId)
     && isPoolCredentialUsable(set.activeAccountId, now);
 
   let accountId: string | null = null;
@@ -642,11 +779,11 @@ export function resolveAnthropicAccountForSession(
     // Unknown usage must NOT force a switch away from the healthy active account.
     if (activeOk
       && !(window === "weekly" && exhausted5h(set.activeAccountId))
-      && (!hasKnownUsage(config, set.activeAccountId) || usageScore(config, set.activeAccountId) < threshold)) {
+      && (!hasKnownUsage(config, set.activeAccountId, modelId) || usageScore(config, set.activeAccountId, modelId) < threshold)) {
       accountId = set.activeAccountId;
       reason = "active";
     } else {
-      const picked = pickLowestUsage(config, undefined, now);
+      const picked = pickLowestUsage(config, undefined, now, modelId);
       if (picked) {
         accountId = picked;
         reason = activeOk && picked === set.activeAccountId ? "active" : "lowest-usage";
@@ -659,7 +796,7 @@ export function resolveAnthropicAccountForSession(
     accountId = set.activeAccountId;
     reason = "active";
   } else {
-    const picked = pickLowestUsage(config, set.activeAccountId, now);
+    const picked = pickLowestUsage(config, set.activeAccountId, now, modelId);
     if (picked) {
       accountId = picked;
       reason = "only-eligible";
@@ -667,7 +804,7 @@ export function resolveAnthropicAccountForSession(
   }
 
   if (!accountId) {
-    const anyCooled = set.accounts.some(a => isCooled(a.id, now));
+    const anyCooled = set.accounts.some(a => isCooled(a.id, now, modelId));
     return { accountId: null, reason: anyCooled ? "all-cooled" : "none" };
   }
 
@@ -707,6 +844,7 @@ export function rotateAnthropicAccountOn429(
   sessionKey?: string | null,
   now = Date.now(),
   rateLimitHeaders?: AnthropicRateLimitHeaders | null,
+  modelId?: string | null,
 ): string | null {
   // Reactive 429 failover is NOT gated on the pool flag. That flag buys PROACTIVE routing --
   // session affinity, quota-ranked new-session selection, autoSwitchThreshold, strategy -- all
@@ -720,15 +858,20 @@ export function rotateAnthropicAccountOn429(
   // reset is the fallback, because a 429 that omits Retry-After still carries it -- and
   // without that fallback such a refusal cools for the 60s default and the exhausted
   // account is back in the rotation a minute later.
-  const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
-  const resetDerived = parsedRetry === undefined ? parseRateLimitResetMs(rateLimitHeaders, now) : undefined;
-  const cooldownMs = parsedRetry ?? resetDerived ?? DEFAULT_COOLDOWN_MS;
-  upstreamHealth.set(failedAccountId, {
-    cooldownUntil: now + cooldownMs,
-    cooldownSource: parsedRetry !== undefined
-      ? "retry-after"
-      : resetDerived !== undefined ? "reset-derived" : "default",
-  });
+  const scoped = familyScopedCooldown(rateLimitHeaders, retryAfterHeader, modelId, now);
+  if (scoped) {
+    storeAnthropicAccountCooldown(failedAccountId, scoped.cooldown, scoped.family);
+  } else {
+    const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
+    const resetDerived = parsedRetry === undefined ? parseRateLimitResetMs(rateLimitHeaders, now) : undefined;
+    const cooldownMs = parsedRetry ?? resetDerived ?? DEFAULT_COOLDOWN_MS;
+    storeAnthropicAccountCooldown(failedAccountId, {
+      cooldownUntil: now + cooldownMs,
+      cooldownSource: parsedRetry !== undefined
+        ? "retry-after"
+        : resetDerived !== undefined ? "reset-derived" : "default",
+    });
+  }
   sweepExpiredOnWrite(now);
   clearAnthropicSessionAffinityForAccount(failedAccountId);
   notePoolRotationFailure(POOL_KEY_ANTHROPIC, failedAccountId);
@@ -741,8 +884,8 @@ export function rotateAnthropicAccountOn429(
   // because those dormant values remain in config. The quota picker is the neutral
   // recovery policy already used by the default strategy.
   const next = isAnthropicAccountPoolEnabled(config)
-    ? pickAlternateAnthropicAccount(config, failedAccountId, now)
-    : pickLowestUsage(config, failedAccountId, now);
+    ? pickAlternateAnthropicAccount(config, failedAccountId, now, modelId)
+    : pickLowestUsage(config, failedAccountId, now, modelId);
   if (!next) {
     console.warn("[anthropic-pool] all eligible Anthropic OAuth accounts are in cooldown; returning 429");
     return null;

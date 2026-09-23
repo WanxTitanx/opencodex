@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { managementFetch as fetch } from "../helpers/management-auth";
 import { logsFromApiBody } from "../helpers/logs-api";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -29,6 +29,7 @@ import {
 } from "../../src/server/claude-messages";
 import { estimateTokens } from "../../src/lib/token-estimate";
 import type { OcxConfig } from "../../src/types";
+import { saveCredential } from "../../src/oauth/store";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -202,6 +203,86 @@ test("non-streaming /v1/messages returns an Anthropic message JSON", async () =>
     expect(json.content[0].type).toBe("text");
     expect(json.content[0].text).toContain("Hello");
     expect(typeof json.usage.input_tokens).toBe("number");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("POST /v1/messages explains an upstream Claude Code version gate", async () => {
+  const message = "Claude Code 2.1.278 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude Code SDK.";
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json({ error: { type: "invalid_request_error", message } }, { status: 400 });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await postMessages(server.url.toString(), {
+      model: "mock/test-model",
+      max_tokens: 8,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(response.status).toBe(400);
+    const body = await response.json() as { error: { message: string } };
+    expect(body.error.message).toContain("mock/test-model requires Claude Code 2.1.280 or newer");
+    expect(body.error.message).toContain("OpenCodex's bundled fingerprint claims 2.1.278");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("Responses names an Anthropic OAuth client-version gate", async () => {
+  let upstreamCalls = 0;
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      upstreamCalls += 1;
+      return Response.json({ error: {
+        type: "invalid_request_error",
+        message: "Claude Code 2.1.278 does not support this model; version 2.1.280 or newer is required.",
+      } }, { status: 400, headers: { "retry-after": "30", "request-id": "req-version-gate" } });
+    },
+  });
+  await saveCredential("anthropic", {
+    access: "fixture-access",
+    refresh: "fixture-refresh",
+    expires: Date.now() + 3_600_000,
+    accountId: "fixture-account",
+  } as never);
+  saveConfig({
+    port: 0,
+    defaultProvider: "anthropic",
+    providers: {
+      anthropic: {
+        adapter: "anthropic",
+        baseUrl: new URL("/v1", upstream.url).href,
+        authMode: "oauth",
+        allowPrivateNetwork: true,
+        liveModels: false,
+        models: ["claude-opus-5-5"],
+      },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/responses", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-opus-5-5", input: "hi", max_output_tokens: 8 }),
+    });
+    expect(response.status).toBe(400);
+    const body = await response.json() as { error: { type: string; code?: string; message: string } };
+    expect(body.error.type).toBe("invalid_request_error");
+    expect(body.error.code).toBe("client_version_too_old");
+    expect(body.error.message).toContain("Claude Code 2.1.280 or newer");
+    expect(body.error.message).toContain("bundled fingerprint claims 2.1.278");
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(response.headers.get("request-id")).toBe("req-version-gate");
+    expect(upstreamCalls).toBe(1);
   } finally {
     await server.stop(true);
     upstream.stop(true);
@@ -445,6 +526,31 @@ const UNSPACED_USAGE_FRAMES = [
   'event:message_start\ndata:{"type":"message_start","message":{"usage":{"input_tokens":11}}}\n\n',
   'event:message_delta\ndata:{"type":"message_delta","usage":{"output_tokens":7}}\n\n',
 ].join("");
+
+test("the log tap skips JSON parsing for text and tool-input frames", async () => {
+  const frames = [
+    `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "ordinary prose" } })}\n\n`,
+    `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { usage: { input_tokens: 1 } } })}\n\n`,
+    `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", delta: { type: "input_json_delta", partial_json: "{}" } })}\n\n`,
+    `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 2 } })}\n\n`,
+  ].join("");
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(sseEncoder.encode(frames));
+      controller.close();
+    },
+  });
+  const ctx = freshLogCtx();
+  const parse = spyOn(JSON, "parse");
+  try {
+    const tap = tapAnthropicSseForLog(upstream, ctx, () => {}, { stallMs: 5_000, maxBytes: 0 });
+    expect(await new Response(tap).text()).toBe(frames);
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(ctx.usage).toMatchObject({ inputTokens: 1, outputTokens: 2 });
+  } finally {
+    parse.mockRestore();
+  }
+});
 
 test("A0: usage extraction accepts unspaced data fields (#1170)", async () => {
   const upstream = new ReadableStream<Uint8Array>({

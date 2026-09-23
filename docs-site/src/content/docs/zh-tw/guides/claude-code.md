@@ -24,7 +24,8 @@ sticky session affinity 與依用量的新工作階段選擇。它**不**控制 
 啟用時的營運契約：
 
 - 上游 **429** 會讓該帳號冷卻（有 `Retry-After` 時使用它，否則用預設 backoff）、清除其 affinity，
-  並可能在同一個請求內輪換到另一個合格帳號（有上限）。
+  並可能在同一個請求內輪換到另一個合格帳號（有上限）。若只有某個模型的每週額度用盡，且統一的
+  5 小時/7 天額度仍可用，冷卻只套用於該模型家族；其他家族仍可使用此帳號。
 - Affinity 是**程序本機**的（proxy 重啟後就會遺失）。
 - **401/403** 憑證失敗會隔離該帳號（`needsReauth`），直到重新認證前都不會參與選擇。
 - 如果每個合格帳號都在冷卻，proxy 會回傳 **429**（不是 401），並在已知時附上 `Retry-After`。
@@ -454,6 +455,8 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 402 `billing_error`、403 `permission_error`、404 `not_found_error`、409 `conflict_error`、
 413 `request_too_large`、429 `rate_limit_error`、504 `timeout_error`、529 `overloaded_error`，
 其他 5xx 為 `api_error`。`Retry-After` 會保留。
+
+Responses 回傳 `client_version_too_old` 表示 Anthropic 要求的 Claude Code 版本高於 OpenCodex 內建指紋宣告的版本。這不是已連線 CLI 的版本或帳號問題；請在 proxy 主機上更新到包含較新 Claude Code 範本的 OpenCodex 版本，然後重新啟動 proxy。
 
 ## 提示快取與 token 用量
 

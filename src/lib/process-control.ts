@@ -279,9 +279,9 @@ async function stopProxyGracefullyDetailed(
 
 function drainDeadlineMs(): number {
   try {
-    return (loadConfig().shutdownTimeoutMs ?? 5000) + 3000;
+    return (loadConfig().shutdownTimeoutMs ?? 90_000) + 3_000;
   } catch {
-    return 8000;
+    return 93_000;
   }
 }
 

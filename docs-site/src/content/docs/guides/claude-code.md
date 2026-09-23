@@ -37,10 +37,13 @@ rotation does not protect against provider enforcement.
 Operational contract when enabled:
 
 - Upstream **429** cools that account, clears its affinities, and may rotate to another eligible
-  account within the same request (bounded). The cooldown uses a usable `Retry-After` when present,
-  otherwise the latest valid reset time among windows Anthropic marks `rejected`, including
-  weekly windows. Valid upstream deadlines are not shortened to a fixed cooldown ceiling.
-  A refusal with no usable deadline falls back to a 60-second default backoff.
+  account within the same request (bounded). A rejected model-scoped weekly bucket cools the
+  account only for that model family when the unified 5-hour and 7-day windows remain available;
+  other families can keep using it. Unified-window exhaustion remains account-wide. The cooldown
+  uses a usable `Retry-After` when present, otherwise the latest valid reset time among windows
+  Anthropic marks `rejected`, including weekly windows. Valid upstream deadlines are not shortened
+  to a fixed cooldown ceiling. A refusal with no usable deadline falls back to a 60-second default
+  backoff.
 - Responses report the serving account's 5-hour and weekly utilization, and whichever of those
   two the response carries is recorded for that account — each window independently, and a
   refusal counts as well as a success. Usage-aware selection works from ordinary traffic,
@@ -676,6 +679,8 @@ on the schema to reject a malformed argument.
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
 other 5xx `api_error`. `Retry-After` is preserved.
+
+A Responses request that returns `client_version_too_old` was rejected because Anthropic requires a newer Claude Code wire version than OpenCodex's bundled fingerprint claims. This is not the connected CLI's version or an account failure. Update OpenCodex on the proxy host to a build with a newer Claude Code template, then restart the proxy.
 
 ## Prompt caching and token usage
 

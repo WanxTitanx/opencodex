@@ -78,12 +78,14 @@ import {
   isCyberPolicyCode,
   CYBER_POLICY_FALLBACK_MESSAGE,
   CYBER_POLICY_ERROR_CODE,
+  CLIENT_VERSION_TOO_OLD_CODE,
   SEND_BUDGET_EXHAUSTED_CODE,
 } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { cancelBodyOnAbort } from "../../lib/abort";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import {
+  describeClaudeClientVersionGate,
   isClaudeEffortParamUnsupported,
   isClaudeLongContextRejection,
   noteClaudeBetaRejection,
@@ -91,6 +93,7 @@ import {
   noteClaudeEffortSupport,
   noteClaudeMaxTokensCap,
   parseClaudeBetaRejection,
+  parseClaudeClientVersionGate,
   parseClaudeEffortRejection,
   parseClaudeMaxTokensRejection,
   stripClaudeContext1mTag,
@@ -772,6 +775,7 @@ export async function prepareAdapterExchange(
           anthropicSessionKey,
           Date.now(),
           upstreamResponse.headers,
+          route.modelId,
         );
         if (!nextAccountId) break;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
@@ -1090,10 +1094,17 @@ export async function prepareAdapterExchange(
       // material before it reaches the client-facing error surface.
       const upstreamRetryAfter = upstreamResponse.headers.get("retry-after");
       const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
+      const versionGate = upstreamResponse.status === 400
+        && route.provider.adapter === "anthropic"
+        && route.provider.authMode === "oauth"
+        ? parseClaudeClientVersionGate(normalized.safeText)
+        : null;
       const message = normalized.cyberPolicy
         ? normalized.message
           ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
-        : enrichOpenCodeZenUpstreamMessage(
+        : versionGate
+          ? describeClaudeClientVersionGate(versionGate, parsed._responseModelId ?? parsed.modelId)
+          : enrichOpenCodeZenUpstreamMessage(
           `Provider error ${upstreamResponse.status}: ${normalized.safeText}`,
           {
             status: upstreamResponse.status,
@@ -1108,22 +1119,28 @@ export async function prepareAdapterExchange(
             supportsHttpSameKeyRetry: true,
           },
         );
-      const retryAfter = normalized.cyberPolicy
+      const retryAfter = normalized.cyberPolicy || versionGate
         ? undefined
         : resolveClientRetryAfter({
           status: upstreamResponse.status,
           message,
           upstreamRetryAfter,
         });
-      return formatErrorResponse(
+      const formatted = formatErrorResponse(
         upstreamResponse.status,
-        normalized.cyberPolicy ? (normalized.type ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
+        normalized.cyberPolicy
+          ? (normalized.type ?? CYBER_POLICY_ERROR_CODE)
+          : versionGate ? "invalid_request_error" : "upstream_error",
         message,
         {
           ...(normalized.cyberPolicy ? { code: CYBER_POLICY_ERROR_CODE } : {}),
+          ...(versionGate ? { code: CLIENT_VERSION_TOO_OLD_CODE } : {}),
           ...(retryAfter !== undefined ? { retryAfter } : {}),
         },
       );
+      const upstreamRequestId = versionGate ? upstreamResponse.headers.get("request-id") : null;
+      if (upstreamRequestId) formatted.headers.set("request-id", upstreamRequestId);
+      return formatted;
     }
   }
 
