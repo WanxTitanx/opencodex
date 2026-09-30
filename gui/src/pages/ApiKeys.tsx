@@ -25,7 +25,9 @@ import {
   isApiKeySpend,
   isApiKeyUsage,
   isAudioApiInfo,
+  parseApiSurfaces,
   type ApiEndpointInfo,
+  type ApiSurfacesInfo,
   type ApiAuthMatrixRow,
   type ApiKeyEntry,
   type ApiKeyQuota,
@@ -49,6 +51,7 @@ interface KeysResponse extends UsageReadMetadata {
   messagesEndpoint?: string;
   modelsEndpoint?: string;
   claudeCodeEnabled?: boolean;
+  surfaces?: unknown;
   audio?: unknown;
 }
 
@@ -64,6 +67,8 @@ type CachedKeysShape = UsageReadMetadata & {
   keys: ApiKeyEntry[];
   endpoints: ApiEndpointInfo;
   claudeCodeEnabled: boolean;
+  /** Absent when the server predates API surface settings. */
+  surfaces?: ApiSurfacesInfo;
   /** Dataset-level: absent means nothing is attributable yet, which is a
    *  different statement from a key whose counters are zero. */
   attributionSince?: string;
@@ -94,7 +99,13 @@ function seedEndpointsFromApiBase(apiBase: string): ApiEndpointInfo {
 /** Session-cache entries get the same scrutiny as a network payload. */
 function validCachedKeys(cached: CachedKeysShape | null): CachedKeysShape | null {
   if (!cached || !isApiAuthMatrix(cached.authMatrix)) return null;
-  if (!Array.isArray(cached.keys) || cached.keys.some(key => !key || !validKeyRow(key))) return null;
+  if (!Array.isArray(cached.keys) || cached.keys.some(key => !key || !isApiKeyUsage(key.usage) || !validPendingRotation(key.pendingRotation))) return null;
+  if (cached.surfaces !== undefined && !parseApiSurfaces(cached.surfaces)) {
+    // Drop an unusable surface record rather than the whole entry: the page falls back to
+    // the flat endpoint list until the network answer arrives.
+    const { surfaces: _surfaces, ...rest } = cached;
+    cached = rest;
+  }
   if (cached.endpoints?.audio !== undefined && !isAudioApiInfo(cached.endpoints.audio, cached.endpoints.baseUrl)) {
     const { audio: _audio, ...endpoints } = cached.endpoints;
     return { ...cached, endpoints };
@@ -172,6 +183,8 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
     if (rows.some(key => !validKeyRow(key))) throw new Error(t("api.keysLoadFailed"));
     const validatedKeys = rows as ApiKeyEntry[];
     const derived = deriveApiEndpoints(data.endpoint ?? "");
+    // An older server sends no surfaces; the endpoints panel then keeps its flat list.
+    const surfaces = parseApiSurfaces(data.surfaces);
     const next: CachedKeysShape = {
       // Validate rather than coerce. A missing or malformed `usage` used to
       // become zeroes, which says "used zero times" about data we could not
@@ -186,6 +199,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         ...(isAudioApiInfo(data.audio, data.baseUrl ?? derived.baseUrl) ? { audio: data.audio } : {}),
       },
       claudeCodeEnabled: data.claudeCodeEnabled !== false,
+      ...(surfaces ? { surfaces } : {}),
       ...(data.attributionSince ? { attributionSince: data.attributionSince } : {}),
       ...(data.historyTruncated === true ? { historyTruncated: true } : {}),
       ...readUsageMetadata(data),
@@ -251,6 +265,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
   const keys = keysData?.keys ?? [];
   const endpoints = keysData?.endpoints ?? seedEndpointsFromApiBase(apiBase);
   const claudeCodeEnabled = keysData?.claudeCodeEnabled ?? true;
+  const surfaces = keysData?.surfaces;
   const attributionSince = keysData?.attributionSince;
   const historyTruncated = keysData?.historyTruncated === true;
   // `?? []` only ever fires while there is no key data at all — both the network
@@ -647,6 +662,8 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         keysLoadFailed={keysState.showError}
         endpoints={endpoints}
         claudeCodeEnabled={claudeCodeEnabled}
+        surfaces={surfaces}
+        onSurfacesChanged={() => { refreshKeys(); }}
         localeTag={localeTag}
         newName={newName}
         newQuota={newQuota}
@@ -656,6 +673,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         rotationSecret={rotationSecret}
         rotationCopied={rotationCopied}
         filteredModels={filteredModels}
+        planModels={models}
         modelsLoading={modelsState.showSkeleton && !modelsState.data && !cachedModels}
         // Only announce progress on a retry after failure — quiet warm revisits stay silent.
         modelsRefreshing={modelsState.refreshing && modelsState.showError && (modelsState.data !== undefined || cachedModels !== null)}

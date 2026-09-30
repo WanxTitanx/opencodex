@@ -25,7 +25,7 @@ import {
 import { parseCatalogBuffer, setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
 import { encodeMessage, encodeString } from "../../src/adapters/devin/cloud-direct/wire";
 import { clearModelCache } from "../../src/codex/model-cache";
-import { getAuthRefreshIntentPath } from "../../src/oauth/store";
+import { getAuthRefreshIntentPath, saveCredential } from "../../src/oauth/store";
 import { knownModelIdsForProvider } from "../../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -45,12 +45,13 @@ const originalKimiRefresh = OAUTH_PROVIDERS.kimi!.refresh;
 let root: string;
 let opencodexHome: string;
 
-function authStoreBytes(expires: number): Buffer {
+function authStoreBytes(expires: number, paused = false): Buffer {
   return Buffer.from(JSON.stringify({
     kimi: {
       activeAccountId: "active",
       accounts: [{
         id: "active",
+        ...(paused ? { paused: true } : {}),
         credential: {
           access: "fixture-a",
           refresh: "fixture-r",
@@ -155,6 +156,53 @@ afterEach(() => {
 });
 
 describe("catalog gather OAuth observation", () => {
+  test("a paused active OAuth account is not exposed to catalog discovery", async () => {
+    const now = Date.now();
+    const observedBuffer = authStoreBytes(now + 3_600_000, true);
+    let outboundCalls = 0;
+
+    expect(observeActiveOAuthAccessToken("kimi", observedBuffer, now).kind).toBe("paused");
+    const { rows, outcomes } = await runCatalogGather(observedBuffer, () => { outboundCalls += 1; });
+
+    expect(outboundCalls).toBe(0);
+    expect(rows.map(row => row.id)).toEqual(["k3"]);
+    expect(outcomes).toEqual([{ provider: "kimi", state: "paused" }]);
+  });
+
+  test("refreshing Copilot gather binds the new bearer to the refreshed origin", async () => {
+    await saveCredential("github-copilot", {
+      access: "fixture-old-token", refresh: "fixture-refresh", expires: Date.now() - 1,
+      apiBaseUrl: "https://api.githubcopilot.com",
+    });
+    const originalRefresh = OAUTH_PROVIDERS["github-copilot"]!.refresh;
+    let refreshCalls = 0;
+    OAUTH_PROVIDERS["github-copilot"]!.refresh = async () => {
+      refreshCalls += 1;
+      return {
+        access: "fixture-new-token", refresh: "fixture-refresh", expires: Date.now() + 3_600_000,
+        apiBaseUrl: "https://api.business.githubcopilot.com",
+      };
+    };
+    const calls: { url: string; authorization: string | null }[] = [];
+    try {
+      const rows = await gatherRoutedModels({ providers: {
+        "github-copilot": {
+          ...structuredClone(OAUTH_PROVIDERS["github-copilot"]!.providerConfig),
+          fetch: async (input, init) => {
+            calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
+            return Response.json({ data: [{ id: "fixture-model" }] });
+          },
+        },
+      } });
+
+      expect(refreshCalls).toBe(1);
+      expect(calls).toEqual([{ url: "https://api.business.githubcopilot.com/models", authorization: "Bearer fixture-new-token" }]);
+      expect(rows.map(row => row.id)).toContain("fixture-model");
+    } finally {
+      OAUTH_PROVIDERS["github-copilot"]!.refresh = originalRefresh;
+    }
+  });
+
   test("expired active token stays typed and gather does not refresh or touch the auth store", async () => {
     const now = Date.now();
     const authPath = join(opencodexHome, "auth.json");

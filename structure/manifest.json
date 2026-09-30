@@ -157,6 +157,7 @@
       "scope": "Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget.",
       "documents": [
         "src/adapters/",
+        "src/chat/",
         "src/lib/",
         "src/server/"
       ]
@@ -258,6 +259,24 @@
       ]
     },
     {
+      "path": "data-planes/protocol-paths.md",
+      "tier": 3,
+      "title": "Protocol Paths",
+      "scope": "Shared protocol vocabulary, declared feature dispositions, the ingress-by-upstream baseline, plan/trace shapes, and protocol settings.",
+      "documents": [
+        "src/protocols/"
+      ]
+    },
+    {
+      "path": "providers/anthropic-account-thresholds.md",
+      "tier": 4,
+      "title": "Anthropic Account Thresholds",
+      "scope": "Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes.",
+      "documents": [
+        "src/oauth/"
+      ]
+    },
+    {
       "path": "providers-and-adapters.md",
       "tier": 4,
       "title": "Providers And Adapters",
@@ -272,6 +291,16 @@
         "src/server/",
         "src/types/",
         "src/web-search/"
+      ]
+    },
+    {
+      "path": "providers/anthropic-account-pool.md",
+      "tier": 4,
+      "title": "Anthropic Account Pool",
+      "scope": "Anthropic OAuth account pause, model routes, and quota labels.",
+      "documents": [
+        "src/oauth/",
+        "src/providers/"
       ]
     },
     {
@@ -349,6 +378,7 @@
       "scope": "Cross-vendor Chat Completions behavior: reasoning, tool results, structured output, parallel tools.",
       "documents": [
         "src/adapters/",
+        "src/chat/",
         "src/responses/"
       ]
     },
@@ -417,6 +447,7 @@
       "title": "Client Integrations",
       "scope": "Third-party client config ownership, snapshots, refresh, disable, and restore.",
       "documents": [
+        "src/cli/",
         "src/clients/",
         "src/integrations/",
         "src/lib/"
@@ -450,11 +481,21 @@
       "title": "Background Service And Sidecars",
       "scope": "Service install/repair, platform launchers, tray, and sidecar processes.",
       "documents": [
+        "src/lib/",
         "src/server/",
         "src/headroom/",
         "src/service-manager-probe.ts",
         "src/sidecar/",
         "src/update/"
+      ]
+    },
+    {
+      "path": "ops/plugins.md",
+      "tier": 6,
+      "title": "Local Plugins",
+      "scope": "Plugin loading from OPENCODEX_HOME/plugins and the upstream rewrite slot plugins attach to.",
+      "documents": [
+        "src/plugins/"
       ]
     },
     {
@@ -490,6 +531,15 @@
       "scope": "Opt-in workspace identity, executor grants, runtime adapters, management and dashboard integration.",
       "documents": [
         "src/remote-control/"
+      ]
+    },
+    {
+      "path": "remote-link.md",
+      "tier": 3,
+      "title": "Remote Link",
+      "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer and the private link store.",
+      "documents": [
+        "src/link/"
       ]
     },
     {
@@ -619,9 +669,7 @@
         "reason": "no test constrains routed slug shape; the ten files that mention provider/model consume slugs rather than enforcing the form"
       }
     ],
-    "oversizeDocs": [
-      "gui-and-management-api.md"
-    ],
+    "oversizeDocs": [],
     "staleRefs": []
   }
 }

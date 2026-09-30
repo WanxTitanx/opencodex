@@ -18,6 +18,12 @@ provider events → internal adapter events → client dialect
 
 認証情報を含むモデル・画像・動画・検索リクエストは、同一オリジンを含む HTTP リダイレクトを自動追跡しません。リダイレクトする別名ではなく、最終的な上流 API URL を設定してください。サーバーはリダイレクト先に認証情報やリクエスト本文を再送しません。各応答処理の既存のエラー処理・中継動作は維持され、native Responses と compact は元の 3xx と `Location` をクライアントへ返す場合があります。クライアントのリダイレクト動作は、このサーバー転送ポリシーとは別です。
 
+## xAI policy refusals
+
+一部の xAI Chat Completions 拒否は、HTTP 200 と `finish_reason: content_filter` ではなく、HTTP 403 と `I can't help with that request.` のような拒否文だけを返します。Codex は 403 を転送失敗として扱うため、ユーザーのターンが記録されず、同じリクエストが再送されます。
+
+コンボではない Responses リクエストでは、OpenCodex はその allowlist 対象の 403 を HTTP 200 の Responses、`status: "incomplete"`、`incomplete_details.reason: "content_filter"` に書き換えます。openai-chat アダプタ経路と openai-responses パススルー（grok-4.6 / grok-4.5 OAuth）の両方です。ストリーミングも同じ incomplete 境界です。空本文の 403 はエラーのままです。サブスクリプション、クレジット、権限、`not allowed to use this model` の 403 はエラーのままです。コンボのフェイルオーバーは元の HTTP 403 を見ます。
+
 ## エンドポイントの概要
 
 |クライアントサーフェス |エンドポイント |非ストリームの結果が成功 |成功したストリームまたはソケットの結果 |
@@ -56,6 +62,8 @@ provider events → internal adapter events → client dialect
 `stream: true` の場合、応答は `text/event-stream` となります。ブリッジは、`response.created`、出力項目およびテキスト/ツール デルタ、および 1 つの端末 `response.completed`、`response.failed`、または `response.incomplete` イベントなどの応答イベントを発行します。通常のストリームは `data: [DONE]` で終了します。
 
 `stream: false` を指定するか、`stream` を指定しないと、同じアダプター イベントが 1 つの Responses JSON オブジェクトに収集されます。どちらの形式でも、選択したモデル、出力項目、端末の状態、使用状況が保存されます。
+
+canonical ChatGPT Codex ルートではアップストリームが SSE のみを受け付けるため、アップストリームへのリクエストだけを `stream: true` にします。OpenCodex は終端ストリームを制限内で検証し、クライアントが要求した JSON 形式へまとめます。明示された `store` は変更せず、検証に失敗した場合は不完全な JSON を HTTP 200 で返さずエラーにします。上限は 1 フレーム 4 MiB、transcript と再構築入力がそれぞれ 32 MiB、SSE フレーム 100,000 件、再構築される output item 10,000 件です。`stallTimeoutSec` は最初の body byte と以後の無通信時間の両方に適用されます。値が `0`、またはローカル upstream の既定値として無効な場合も即時には失効せず、独立した 15 分の全体上限だけが残ります。ストリーミング クライアントの動作は変わりません。
 
 クライアント向け Responses SSE フレームは、SSE ブロック区切りの前の生バイトで測って 1 フレームあたり 4 MiB に制限されます。HTTP では、区切りなしでこの上限を超えたアップストリーム フレームは、合成 `response.failed` イベントと続く `data: [DONE]` でフェイルクローズします。Responses WebSocket ブリッジでは、同じ条件で 502 `websocket_protocol_error` を送信し、アップストリーム リーダーをキャンセルします。完全な Responses 終端フレームがすでに到着している場合はそれが優先され、その後のサイズ超過または不正なバイトは、完了したターンをトランスポート障害に置き換えず破棄されます。
 

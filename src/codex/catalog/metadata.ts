@@ -16,7 +16,7 @@ import { getProviderRegistryEntry, providerCodexAccountMode } from "../../provid
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
-import { identifyRoutedModel } from "../../adapters/identity";
+import { neutralizeIdentity } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
@@ -47,6 +47,7 @@ import {
   NATIVE_GPT6_ASTRA_MODEL,
   NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT6_SOL_MODEL,
+  NATIVE_GPT61_SOL_MODEL,
   NATIVE_RESERVE_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
@@ -70,6 +71,7 @@ export {
   NATIVE_GPT6_ASTRA_MODEL,
   NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT6_SOL_MODEL,
+  NATIVE_GPT61_SOL_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
@@ -89,6 +91,8 @@ export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   // client_version >= 0.155.0, so an installed catalog built by an older client lacks them.
   // Astra Minor is deliberately absent: it is gated, and nativeOpenAiSlugs() would drop it anyway.
   NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL,
+  // GPT-6.1 Sol needs client_version >= 0.153.0 upstream; older installed catalogs lack it.
+  NATIVE_GPT61_SOL_MODEL,
 ];
 
 export function configuredNativeAliasSlugs(
@@ -196,6 +200,8 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
   // the row's own ceiling rather than the GPT-5.6 family's measured 922,000.
   [NATIVE_GPT6_SOL_MODEL]: { ...NATIVE_GPT6_CONTEXT },
   [NATIVE_GPT6_LUNA_MODEL]: { ...NATIVE_GPT6_CONTEXT },
+  // GPT-6.1 Sol's row (openai/codex models.json after #49318) ships the same 272,000 / 872,000 pair.
+  [NATIVE_GPT61_SOL_MODEL]: { ...NATIVE_GPT6_CONTEXT },
   // Astra Minor borrows Astra's row, so it inherits Astra's numbers. No account we hold can reach
   // it, so this is inheritance, not a measurement.
   [NATIVE_GPT6_ASTRA_MINOR_MODEL]: { ...NATIVE_GPT6_CONTEXT },
@@ -584,14 +590,14 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
   alias.display_name = presentation.displayName;
   alias.description = presentation.description;
   if (typeof alias.base_instructions === "string") {
-    alias.base_instructions = identifyRoutedModel(alias.base_instructions, slug);
+    alias.base_instructions = neutralizeIdentity(alias.base_instructions);
   }
   if (alias.model_messages && typeof alias.model_messages === "object" && !Array.isArray(alias.model_messages)) {
     const modelMessages = alias.model_messages as Record<string, unknown>;
     if (typeof modelMessages.instructions_template === "string") {
       alias.model_messages = {
         ...modelMessages,
-        instructions_template: identifyRoutedModel(modelMessages.instructions_template, slug),
+        instructions_template: neutralizeIdentity(modelMessages.instructions_template),
       };
     }
   }

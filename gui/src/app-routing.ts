@@ -1,6 +1,6 @@
 /** Pure hash → page resolution used by App route state. */
 
-import { normalizeHashPath } from "./hash-routing";
+import { normalizeHashPath, splitHashQuery } from "./hash-routing";
 
 export type Page =
   | "dashboard"
@@ -12,6 +12,7 @@ export type Page =
   | "usage"
   | "storage"
   | "remote"
+  | "remote-workspace"
   | "headroom"
   | "codex-set"
   | "api-keys"
@@ -27,6 +28,7 @@ export const VALID_PAGES = new Set<Page>([
   "usage",
   "storage",
   "remote",
+  "remote-workspace",
   "headroom",
   "codex-set",
   "api-keys",
@@ -34,9 +36,9 @@ export const VALID_PAGES = new Set<Page>([
 ]);
 
 export function readPageFromHash(hash?: string): Page {
-  const raw = normalizeHashPath(
+  const raw = splitHashQuery(normalizeHashPath(
     hash ?? (typeof window !== "undefined" ? window.location.hash : ""),
-  );
+  )).path;
   // Sub-views use a "/" suffix (e.g. #logs/debug); the first segment is the page id.
   const pageId = raw.split("/")[0] as Page;
   // Legacy: Debug used to be a standalone page; it now lives as a tab on Logs.
@@ -76,6 +78,8 @@ export const DASHBOARD_TAB_HASHES = ["dashboard/providers", "dashboard/models"] 
  * uses for Overview and Logs uses for the log list.
  */
 export const MODELS_TAB_HASHES = ["models/combos", "models/routing", "models/compatibility"] as const;
+/** Action deep link that opens the editable JEV Auto template in the Combos tab. */
+export const JEV_AUTO_CREATE_HASH = "models/combos/jev-auto";
 
 /**
  * `#dashboard/update` is an action deep link, not a tab: the sidebar update button uses
@@ -111,13 +115,26 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/raycast",
   "integrations/omo",
   "integrations/cline",
+  "integrations/kilo",
+  "integrations/droid",
 ] as const;
+
+/**
+ * Routes that own a `?query` suffix: provider settings for one provider
+ * (`#providers?provider=<name>`) and a protocol-pair prefilter on the compatibility matrix
+ * (`#models/compatibility?inbound=chat&upstream=messages`). Anywhere else the query is dropped.
+ */
+export const QUERY_HASH_PATHS: readonly string[] = ["providers", "models/compatibility"];
 
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
     || (page === "logs" && rawHash === "logs/debug")
+    || (page === "usage" && rawHash === "usage/companion")
     || (page === "codex-set" && rawHash === "codex-set/prompt")
-    || (page === "models" && (MODELS_TAB_HASHES as readonly string[]).includes(rawHash))
+    || (page === "models" && (
+      (MODELS_TAB_HASHES as readonly string[]).includes(rawHash)
+      || rawHash === JEV_AUTO_CREATE_HASH
+    ))
     || (page === "dashboard"
       && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash)))
     || (page === "integrations"
@@ -137,6 +154,14 @@ export type AppHashChangeAction = {
  * push, so Back is never trapped on a hash the router immediately corrects.
  */
 export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
+  const { path, query } = splitHashQuery(rawHash);
+  if (query || path !== rawHash) {
+    // Route on the path alone; keep the query only where a page owns it, so Back/Forward
+    // restores it and an unrelated page never carries a stale one.
+    const action = resolveAppHashChange(path);
+    if (action.replaceTo === null && QUERY_HASH_PATHS.includes(path)) return action;
+    return { page: action.page, replaceTo: action.replaceTo ?? path };
+  }
   const nextPage = readPageFromHash(rawHash);
 
   // Legacy: Debug used to be a standalone page.

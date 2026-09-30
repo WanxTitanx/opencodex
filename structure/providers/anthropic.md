@@ -51,7 +51,7 @@ parameter → max_tokens → long context) inside a bounded per-request budget.
 
 On the Responses path, a Claude Code minimum-version 400 returns `invalid_request_error` with `client_version_too_old` and is not retried: the bundled `claude-cli` fingerprint is the version Anthropic gated. The Messages path rewrites the same gate into an explanation for Anthropic-shaped callers.
 
-Anthropic OAuth 429 handling in `src/oauth/anthropic-routing.ts` scopes a rejected model-family weekly bucket to that family when the unified 5h/7d windows remain available. The scoped cooldown survives later responses without that bucket; unified-window and ordinary rate-limit cooldowns remain account-wide.
+Anthropic OAuth 429 handling in `src/oauth/anthropic-routing.ts` uses the model-family overlay in `src/oauth/anthropic-model-cooldown.ts` and scopes a rejected model-family weekly bucket to that family when the unified 5h/7d windows remain available. The scoped cooldown survives later responses without that bucket; unified-window and ordinary rate-limit cooldowns remain account-wide. The overlay also applies during late dispatch admission and combines with upstream route membership, paused-account checks, per-account switching thresholds, and generation-fenced recovery of account-wide cooldowns. A global rejected-window header takes precedence over a family-only refusal.
 
 ## Local Claude Code account import
 
@@ -73,3 +73,7 @@ machine-wide Claude credential (`src/oauth/anthropic-routing.ts`). Import
 failure is non-fatal: the request falls back to the ordinary login-required
 error. An operator-set `authMode: "key"` or `apiKey` on the anthropic provider
 row is respected — the credential lands in `auth.json` without flipping routing.
+
+Local CLI credential adoption is isolated in `src/oauth/anthropic-local-adoption.ts`: stored account labels follow the refreshed token only while the local subscription identity still matches. The translated subscription envelope preserves explicit tool prohibition and the upstream fast-speed/beta pair. Native Messages retains its byte-preserving transport and baseline header contract.
+
+Late credential replacement stamps both the original parsed request and its retry clone with the serving account identity; fields absent from the replacement are cleared instead of retaining a previous account's identity.

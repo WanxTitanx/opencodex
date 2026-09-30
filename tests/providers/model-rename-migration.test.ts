@@ -57,6 +57,15 @@ function staleConfig(): OcxConfig {
 }
 
 describe("registry model rename migration (#1610)", () => {
+  test.each([false, true])("preserves provider response-tier authority %s across a model rename", authority => {
+    const stale = staleConfig();
+    stale.providers[RENAME.provider]!.responseTierAuthoritative = authority;
+    const { config, changed } = projectModelRenames(stale, [RENAME]);
+    expect(changed).toBe(true);
+    expect(config.providers[RENAME.provider]!.models).toContain(RENAME.to);
+    expect(config.providers[RENAME.provider]!.responseTierAuthoritative).toBe(authority);
+  });
+
   test("rewrites every model-keyed field, preserving list order", () => {
     const { config, changed, warnings } = projectModelRenames(staleConfig(), [RENAME]);
     const prov = config.providers["alibaba-token-plan-intl"]!;
@@ -116,6 +125,21 @@ describe("registry model rename migration (#1610)", () => {
     const { config, changed } = projectModelRenames(custom, [RENAME]);
     expect(changed).toBe(false);
     expect(config.providers["alibaba-token-plan-intl"]!.models).toContain("qwen3.8-max-preview");
+  });
+
+  test.each([
+    ` HTTPS://TOKEN-PLAN.AP-SOUTHEAST-1.MAAS.ALIYUNCS.COM/compatible-mode/v1`,
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com:443/compatible-mode/v1",
+  ])("migrates a row whose saved endpoint is URL-equivalent to the registry's: %s", baseUrl => {
+    // The stored baseUrl keeps its whitespace and port — only the endpoint
+    // comparison trims, lowercases the host, and drops default ports, so these
+    // rows still point at the registry destination.
+    const config = staleConfig();
+    config.providers["alibaba-token-plan-intl"]!.baseUrl = baseUrl;
+    const { config: migrated, changed } = projectModelRenames(config, [RENAME]);
+    expect(changed).toBe(true);
+    expect(migrated.providers["alibaba-token-plan-intl"]!.models).toContain("qwen3.8-max");
+    expect(migrated.providers["alibaba-token-plan-intl"]!.models).not.toContain("qwen3.8-max-preview");
   });
 
   test("refuses to write an id the registry does not seed", () => {

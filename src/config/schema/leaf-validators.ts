@@ -10,6 +10,7 @@ import {
   normalizeNonBlankStringArray,
   normalizeAutoReviewModelOverrides,
   modelCapabilitiesConfigError,
+  contextTierRecordConfigError,
   mergeModelCapabilities,
 } from "../provider-validation";
 import { isValidCodexAccountNamespaceTarget } from "../../codex/account-namespace-match";
@@ -56,6 +57,21 @@ export const compactionRoutingSchema = z.object({
 }).strict();
 
 /**
+ * One phase of Codex's memory pipeline. A present phase must name a model: the GUI's "Off"
+ * removes the phase instead of blanking it, so an empty entry would only ever come from a
+ * hand-edited file, where failing the write is the honest answer.
+ */
+export const memoryModelSettingSchema = z.object({
+  model: z.string().trim().min(1),
+  reasoningEffort: z.string().refine(value => pinnedReasoningEffortConfigError(value) === null).optional(),
+}).strict();
+
+export const memoryModelsSchema = z.object({
+  extract: memoryModelSettingSchema.optional(),
+  consolidation: memoryModelSettingSchema.optional(),
+}).strict();
+
+/**
  * Bounds for the opt-in same-target 429 wait-and-retry policy. Single source of truth
  * shared by the config schema, the load-time sanitizer, and the management write
  * boundary. Strict, so an unknown key is rejected at every validation boundary instead
@@ -77,7 +93,7 @@ export const retryOn429PolicySchema = z.object({
  * both retry layers, so the ceiling is deliberately lower than `retryOn429`'s: 10 total sends
  * against an already-failing provider is already generous.
  */
-const transientRetryOn5xxPolicySchema = z.object({
+export const transientRetryOn5xxPolicySchema = z.object({
   enabled: z.boolean().optional(),
   attempts: z.number().int().min(1).max(10).optional(),
 }).strict();
@@ -97,18 +113,23 @@ const requestPacingRuleSchema = z.object({
   // Keep the RPM-derived timer within the same one-hour bound as minIntervalMs.
   requestsPerMinute: z.number().min(1 / 60).max(60_000).optional(),
   minIntervalMs: z.number().int().min(1).max(3_600_000).optional(),
-}).strict().refine(value => value.requestsPerMinute !== undefined || value.minIntervalMs !== undefined, {
-  message: "request pacing rules need requestsPerMinute or minIntervalMs",
+  maxConcurrentRequests: z.number().int().min(1).optional(),
+}).strict().refine(value => value.requestsPerMinute !== undefined
+  || value.minIntervalMs !== undefined
+  || value.maxConcurrentRequests !== undefined, {
+  message: "request pacing rules need requestsPerMinute, minIntervalMs, or maxConcurrentRequests",
 });
 
 const requestPacingSchema = z.object({
   enabled: z.boolean(),
   requestsPerMinute: z.number().min(1 / 60).max(60_000).optional(),
   minIntervalMs: z.number().int().min(1).max(3_600_000).optional(),
+  maxConcurrentRequests: z.number().int().min(1).optional(),
   models: z.record(z.string().trim().min(1), requestPacingRuleSchema).optional(),
 }).strict().refine(value => value.enabled === false
   || value.requestsPerMinute !== undefined
   || value.minIntervalMs !== undefined
+  || value.maxConcurrentRequests !== undefined
   || (value.models !== undefined && Object.keys(value.models).length > 0), {
   message: "enabled request pacing needs a provider rule or model override",
 });
@@ -117,7 +138,7 @@ export function requestPacingConfigError(value: unknown): string | null {
   if (value === undefined) return null;
   const parsed = requestPacingSchema.safeParse(value);
   if (parsed.success) return null;
-  return "requestPacing must contain enabled and a valid requestsPerMinute/minIntervalMs provider rule or model overrides";
+  return "requestPacing must contain enabled and a valid requestsPerMinute/minIntervalMs/maxConcurrentRequests provider rule or model overrides";
 }
 
 /**
@@ -259,6 +280,10 @@ const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
  */
 export const providerConfigSchema = z.object({
   modelCapabilities: modelCapabilitiesSchema.optional(),
+  modelContextTiers: z.unknown().superRefine((value, ctx) => {
+    const error = contextTierRecordConfigError(value);
+    if (error) ctx.addIssue({ code: "custom", message: error });
+  }).optional().transform(value => value as OcxProviderConfig["modelContextTiers"]),
   pinnedReasoningEffort: pinnedReasoningEffortSchema.optional(),
   modelPinnedReasoningEfforts: modelPinnedEffortsSchema.optional(),
   // Validated rather than left to passthrough: an unrecognized strategy would otherwise
@@ -292,6 +317,8 @@ export const providerConfigSchema = z.object({
   annotateEmptyToolOutputs: z.boolean().optional(),
   foldDeveloperRoleToSystem: z.boolean().optional(),
   fastWire: fastWireSchema.nullable().optional(),
+  responseTierAuthoritative: z.boolean().optional(),
+  fastEnabled: z.boolean().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   modelSuppressSyntheticMax: z.record(z.string().min(1), z.boolean()).optional(),
@@ -311,9 +338,11 @@ export const providerConfigSchema = z.object({
   upstreamHttpVersion: z.enum(UPSTREAM_HTTP_VERSION_VALUES)
     .nullish()
     .transform(value => value ?? undefined),
-  // Opt-in upstream Responses WebSocket for OpenAI-compatible providers (e.g.
-  // aggregators whose WebSocket ingress is measurably faster than SSE). The
-  // canonical ChatGPT backend WS selection is independent of this flag.
+  // Opt-in upstream Responses WebSocket for OpenAI-compatible providers, honored only
+  // for the first-party api.openai.com/v1 upstream; other custom endpoints stay on
+  // bounded HTTP/SSE. On the canonical ChatGPT `openai` provider the same field selects
+  // the transport: omitted keeps the upstream WebSocket on eligible turns, explicit
+  // `false` sends streaming turns over HTTP/SSE, and provider management rejects `true`.
   upstreamWebsocket: z.boolean().optional(),
   directGeminiWireRenames: z.boolean().optional(),
   googleToolSchemaPolicy: z.enum(["compatible", "reject-lossy"]).optional(),
@@ -353,6 +382,7 @@ export const providerConfigSchema = z.object({
   // accepted, persisted, and then silently resolved to the `code_mode_only` default — the
   // operator asked for shell mode, got code mode, and was told nothing (#2106).
   codexToolMode: z.enum(["code_mode_only", "shell"]).optional(),
+  projectContext: z.enum(["off", "on"]).optional(),
   responsesItemIdRepair: z.object({
     message: z.array(z.string().min(1)).optional(),
     reasoning: z.array(z.string().min(1)).optional(),
@@ -360,6 +390,7 @@ export const providerConfigSchema = z.object({
     repairInvalidIds: z.boolean().optional(),
   }).strict().optional(),
   responsesSnapshotRepair: z.boolean().optional(),
+  hideRawReasoning: z.boolean().optional(),
   // Invalid blocks degrade to "absent" rather than failing the whole config load: an unusable
   // bridge block must never send an operator through invalid-config recovery for an opt-in
   // feature that is off by default. The management write boundary still rejects it loudly.
@@ -367,7 +398,11 @@ export const providerConfigSchema = z.object({
   xaiResponsesXSearch: z.boolean().optional(),
   xaiResponsesDefaultVersion: z.number().int().positive().optional().catch(undefined),
   zaiResponsesDefaultVersion: z.number().int().positive().optional().catch(undefined),
-}).passthrough();
+}).passthrough().superRefine((provider, ctx) => {
+  if (provider.projectContext !== undefined && provider.adapter !== "command-code") {
+    ctx.addIssue({ code: "custom", path: ["projectContext"], message: "projectContext is supported only by the command-code adapter" });
+  }
+});
 
 
 export { providerRelativeSendPathConfigError } from "../provider-relative-send-path";
@@ -822,6 +857,7 @@ export const agentTaskRecoverySchema = z.object({
   model: z.string().trim().min(1).optional(),
   timeoutMs: z.number().int().min(1_000).max(120_000).optional(),
   cacheEntries: z.number().int().min(1).max(512).optional(),
+  retries: z.number().int().min(0).max(2).optional(),
 }).strict();
 
 export const runtimeRoleSchema = z.enum(["standalone", "hub", "client"]);
@@ -895,6 +931,13 @@ export const remoteGuiConfigSchema = z.object({
 
 const connectedClientIdSchema = z.enum(["codex", "claude"]);
 const clientTimestampSchema = z.string().datetime({ offset: true });
+const clientTransportSchema = z.enum(["hub", "link"]);
+const linkTransportSchema = z.object({
+  // Same range as isLinkPort in src/link/ports.ts, restated here because the config schema sits on
+  // every install's core path and must not import link code (tests/lab/core-link-boundary.test.ts).
+  tunnelPort: z.number().int().min(1024).max(65535),
+  linkId: z.string().regex(/^lnk_[0-9a-f]{16}$/),
+}).strict();
 const clientOriginSchema = z.string().transform((value, ctx) => {
   const origin = canonicalHttpOrigin(value);
   if (!origin) {
@@ -907,6 +950,8 @@ export const clientConnectionSchema = z.object({
   serverUrl: clientOriginSchema,
   managementUrl: clientOriginSchema,
   managementTransport: z.enum(["direct", "relay"]),
+  transport: clientTransportSchema.optional(),
+  link: linkTransportSchema.optional(),
   selectedClients: z.array(connectedClientIdSchema).min(1).max(2).superRefine((clients, ctx) => {
     if (new Set(clients).size !== clients.length) {
       ctx.addIssue({ code: "custom", message: "must contain unique client ids" });
@@ -933,7 +978,34 @@ export const clientConnectionSchema = z.object({
       ctx.addIssue({ code: "custom", path: ["oldKeyBackupPath"], message: `must equal ${expected}` });
     }
   }).optional(),
-}).strict();
+}).strict().superRefine((connection, ctx) => {
+  const transport = connection.transport ?? "hub";
+  if (transport === "hub" && connection.link !== undefined) {
+    ctx.addIssue({ code: "custom", path: ["link"], message: "link is allowed only when transport is link" });
+    return;
+  }
+  if (transport !== "link") return;
+  if (!connection.link) {
+    ctx.addIssue({ code: "custom", path: ["link"], message: "link is required when transport is link" });
+    return;
+  }
+  if (connection.managementTransport !== "direct") {
+    ctx.addIssue({ code: "custom", path: ["managementTransport"], message: "link transport requires direct management transport" });
+  }
+  if (connection.serverUrl !== connection.managementUrl) {
+    ctx.addIssue({ code: "custom", path: ["managementUrl"], message: "link transport requires serverUrl and managementUrl to match" });
+  }
+  let origin: URL;
+  try {
+    origin = new URL(connection.serverUrl);
+  } catch {
+    return;
+  }
+  if (origin.protocol !== "http:" || origin.hostname !== "127.0.0.1"
+    || origin.port !== String(connection.link.tunnelPort)) {
+    ctx.addIssue({ code: "custom", path: ["serverUrl"], message: "link transport requires http://127.0.0.1:<tunnelPort>" });
+  }
+});
 
 /**
  * Codex pool selection policy section.
@@ -944,6 +1016,27 @@ export const clientConnectionSchema = z.object({
  */
 export const codexPoolSchema = z.object({
   excludedPlans: z.array(z.string().trim().min(1)).optional(),
+  startIdleWindows: z.boolean().optional(),
+  lowQuotaProtection: z.object({
+    enabled: z.boolean(),
+    threshold: z.number().finite().min(1).max(100),
+    actions: z.object({
+      pause: z.boolean(),
+      notify: z.boolean(),
+    }).strict(),
+    windows: z.object({
+      short: z.boolean(),
+      weekly: z.boolean(),
+    }).strict(),
+  }).strict().superRefine((policy, ctx) => {
+    if (!policy.enabled) return;
+    if (!policy.actions.pause && !policy.actions.notify) {
+      ctx.addIssue({ code: "custom", path: ["actions"], message: "enabled low-quota protection needs an action" });
+    }
+    if (!policy.windows.short && !policy.windows.weekly) {
+      ctx.addIssue({ code: "custom", path: ["windows"], message: "enabled low-quota protection needs a window" });
+    }
+  }).optional(),
 }).strict();
 
 /**
@@ -1054,4 +1147,11 @@ export const spendSchema = z.object({
   identity: spendScopeSchema.optional(),
   pool: spendScopeSchema.optional(),
   retentionDays: z.number().int().min(1).max(365).optional(),
+}).strict();
+
+/**
+ * Runtime skills catalog configuration (#5569).
+ */
+export const skillsConfigSchema = z.object({
+  catalog_refresh: z.enum(["per_session", "per_turn"]).optional(),
 }).strict();

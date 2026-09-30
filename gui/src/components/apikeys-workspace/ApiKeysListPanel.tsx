@@ -9,7 +9,7 @@
  */
 import { useEffect, useState } from "react";
 import { useT } from "../../i18n/shared";
-import { formatCreatedDate, formatUsd, type ApiKeyEntry } from "../../pages/api-keys-utils";
+import { formatCreatedDate, formatUsd, hasApiKeyQuota, type ApiKeyEntry } from "../../pages/api-keys-utils";
 import type { UsageReadMetadata } from "../../usage-summary-resource";
 import { UsageIncompleteNotice } from "../usage-incomplete-notice";
 
@@ -142,7 +142,7 @@ export default function ApiKeysListPanel({
                     >
                       {k.name}
                     </button>
-                    <span className="awi-keylist-spend muted small">
+                    {hasApiKeyQuota(k) && <span className="awi-keylist-spend muted small">
                       {k.quota.dailyUsd > 0
                         ? t("api.quota.railSpend", {
                           spent: formatUsd(k.spend.dailyUsd, localeTag),
@@ -151,7 +151,7 @@ export default function ApiKeysListPanel({
                         : t("api.quota.railSpendUnlimited", {
                           spent: formatUsd(k.spend.dailyUsd, localeTag),
                         })}
-                    </span>
+                    </span>}
                   </td>
                   <td><code>{k.prefix}</code></td>
                   <td>

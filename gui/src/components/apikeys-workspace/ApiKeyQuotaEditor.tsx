@@ -11,7 +11,7 @@
  */
 import { useState } from "react";
 import { useT } from "../../i18n/shared";
-import { formatCreatedDate, formatUsd, type ApiKeyEntry, type ApiKeyQuota } from "../../pages/api-keys-utils";
+import { formatCreatedDate, formatUsd, type ApiKeyQuotaEntry, type ApiKeyQuota } from "../../pages/api-keys-utils";
 
 const WINDOWS = [
   { field: "dailyUsd", labelKey: "api.quota.daily", spendField: "dailyUsd" },
@@ -19,7 +19,7 @@ const WINDOWS = [
   { field: "monthlyUsd", labelKey: "api.quota.monthly", spendField: "monthlyUsd" },
 ] as const;
 
-function draftFrom(entry: ApiKeyEntry): Record<(typeof WINDOWS)[number]["field"], string> {
+function draftFrom(entry: ApiKeyQuotaEntry): Record<(typeof WINDOWS)[number]["field"], string> {
   return {
     dailyUsd: entry.quota.dailyUsd > 0 ? String(entry.quota.dailyUsd) : "",
     weeklyUsd: entry.quota.weeklyUsd > 0 ? String(entry.quota.weeklyUsd) : "",
@@ -33,7 +33,7 @@ export default function ApiKeyQuotaEditor({
   onSave,
   onReset,
 }: {
-  entry: ApiKeyEntry;
+  entry: ApiKeyQuotaEntry;
   localeTag?: string;
   onSave: (id: string, quota: ApiKeyQuota | null) => Promise<boolean>;
   onReset: (id: string) => Promise<boolean>;

@@ -11,6 +11,10 @@ import { applyRemoteDesktopStore, restoreRemoteDesktopStore, writeDesktopDisconn
 import * as lifecycleLock from "../../src/client/lifecycle-lock";
 import { readClientConnectionState, clearClientConnection } from "../../src/client/state";
 import { HubClientError } from "../../src/client/hub-client";
+import { RuntimeApiError } from "../../src/cli/runtime-api";
+import type { DesktopPickerStatus } from "../../src/claude/desktop-picker";
+import { ensurePickerCa, pickerCaCertPath, pickerCaFingerprints, PICKER_CA_COMMON_NAME } from "../../src/claude/intercept/picker-ca";
+import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { claudeDesktopIntegrationEnabledNow, setIntegrationEnabled } from "../../src/codex/desired-state";
 import { resetCodexRuntimeResolveCacheForTests, setCodexRuntimeResolveCacheForTests } from "../../src/codex/runtime";
 import { resetBundledCatalogCacheForTests, setBundledCatalogCacheForTests } from "../../src/codex/catalog/bundled";
@@ -560,8 +564,231 @@ test("usage errors on desktop verbs exit 2, not 1", async () => {
     expect(await handleClaudeDesktopCommand(["move"])).toBe(2);
     expect(await handleClaudeDesktopCommand(["nope"])).toBe(2);
     expect(await handleClaudeDesktopCommand(["apply", "--wat"])).toBe(2);
+    expect(await handleClaudeDesktopCommand(["picker"])).toBe(2);
+    expect(await handleClaudeDesktopCommand(["picker", "wat"])).toBe(2);
+    expect(await handleClaudeDesktopCommand(["picker", "on", "extra"])).toBe(2);
   } finally {
     log.mockRestore();
     error.mockRestore();
   }
+});
+
+function pickerStatus(reason: DesktopPickerStatus["reason"] = "restart_required", caSha256: string | null = null): DesktopPickerStatus {
+  return {
+    desired: true,
+    supported: true,
+    trust: "trusted",
+    profile: "applied",
+    listenerReady: true,
+    effective: false,
+    reason,
+    models: 1,
+    snapshotAt: 1,
+    lastBootstrapAt: null,
+    caSha256,
+  };
+}
+
+test("picker on refuses without a live proxy", async () => {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(await handleClaudeDesktopCommand(["picker", "on"], { findLiveProxyImpl: async () => null })).toBe(1);
+    expect(error.mock.calls.flat().join(" ")).toContain("proxy_unavailable");
+  } finally { error.mockRestore(); }
+});
+
+test("picker status uses the live management route", async () => {
+  const calls: string[] = [];
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await handleClaudeDesktopCommand(["picker", "status"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      runtimeRequestImpl: async path => { calls.push(path); return { ok: true, picker: pickerStatus("active") }; },
+    })).toBe(0);
+    expect(calls).toEqual(["/api/claude-desktop/picker"]);
+    expect(log.mock.calls.flat().join(" ")).toContain('"reason":"active"');
+  } finally { log.mockRestore(); }
+});
+
+test("picker on answers trust_pending by trusting locally and repeating the PUT", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const ca = ensurePickerCa(join(process.env.OPENCODEX_HOME!, "picker-pending-test"));
+  try {
+    expect(await handleClaudeDesktopCommand(["picker", "on"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      ensurePickerCaImpl: () => ca,
+      inspectPickerTrustImpl: async () => "untrusted",
+      trustPickerCaImpl: async () => ({ ok: true }),
+      runtimeRequestImpl: async (_path, init) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return bodies.length === 1
+          ? { ok: true, picker: pickerStatus("trust_pending") }
+          : { ok: true, picker: pickerStatus("restart_required") };
+      },
+    })).toBe(0);
+    expect(bodies).toEqual([
+      { enabled: true, persist: true },
+      { enabled: true, persist: true, trustedLocally: true, callerAddedTrust: true },
+    ]);
+  } finally { log.mockRestore(); }
+});
+
+test("picker trust refuses a CA file the live server does not own", async () => {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  // The file exists but the server reports a different authority fingerprint — a swapped ca.pem
+  // must never reach the keychain.
+  ensurePickerCa(process.env.OPENCODEX_HOME!);
+  const trusted: string[] = [];
+  try {
+    const result = await handleClaudeDesktopCommand(["picker", "trust"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      inspectPickerTrustImpl: async () => "untrusted",
+      trustPickerCaImpl: async () => { trusted.push("trust"); return { ok: true }; },
+      runtimeRequestImpl: async (_path, init) => {
+        if (init.body === undefined) {
+          return { ok: true, picker: pickerStatus("restart_required", "0".repeat(64)) };
+        }
+        return { ok: true, picker: pickerStatus("trust_pending") };
+      },
+    });
+    expect(result).toBe(1);
+    expect(trusted).toEqual([]);
+    expect(error.mock.calls.flat().join(" ")).toContain("ca_unverified");
+  } finally { error.mockRestore(); }
+});
+
+test("picker trust installs the file only when it matches the server-reported CA", async () => {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const ca = ensurePickerCa(process.env.OPENCODEX_HOME!);
+  const caSha256 = pickerCaFingerprints(ca.certPem).sha256;
+  const trusted: string[] = [];
+  try {
+    const result = await handleClaudeDesktopCommand(["picker", "trust"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      inspectPickerTrustImpl: async () => "untrusted",
+      trustPickerCaImpl: async (_caPath, _sec, _plat, opts) => {
+        trusted.push(opts?.pem === ca.certPem ? "pem-matched" : "pem-mismatch");
+        return { ok: true };
+      },
+      runtimeRequestImpl: async (_path, init) => {
+        if (init.body === undefined) return { ok: true, picker: pickerStatus("restart_required", caSha256) };
+        return { ok: true, picker: pickerStatus("active", caSha256) };
+      },
+    });
+    expect(result).toBe(0);
+    expect(trusted).toEqual(["pem-matched"]);
+  } finally { error.mockRestore(); log.mockRestore(); }
+});
+
+test("picker trust rejects an unconstrained CA even when the server reports its fingerprint", async () => {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  // The real trust path reads ca.pem from disk; a matching server-reported fingerprint must not
+  // rescue a root whose profile this process would never mint.
+  const ca = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME });
+  const caPath = pickerCaCertPath(process.env.OPENCODEX_HOME!);
+  mkdirSync(dirname(caPath), { recursive: true });
+  writeFileSync(caPath, ca.certPem, { mode: 0o644 });
+  const caSha256 = pickerCaFingerprints(ca.certPem).sha256;
+  const trusted: string[] = [];
+  try {
+    const result = await handleClaudeDesktopCommand(["picker", "trust"], {
+      findLiveProxyImpl: async () => ({ pid: null, port: 10100, hostname: "127.0.0.1", source: "config" }),
+      inspectPickerTrustImpl: async () => "untrusted",
+      trustPickerCaImpl: async () => { trusted.push("trust"); return { ok: true }; },
+      runtimeRequestImpl: async () => ({ ok: true, picker: pickerStatus("restart_required", caSha256) }),
+    });
+    expect(result).toBe(1);
+    expect(trusted).toEqual([]);
+    expect(error.mock.calls.flat().join(" ")).toContain("ca_unverified");
+  } finally { error.mockRestore(); }
+});
+
+test("picker off offline persists the preference and removes local artifacts", async () => {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const removed: string[] = [];
+  try {
+    const result = await handleClaudeDesktopCommand(["picker", "off"], {
+      findLiveProxyImpl: async () => null,
+      removeDesktopPickerArtifacts: async () => { removed.push("cleanup"); return { ok: true }; },
+    });
+    expect(result).toBe(0);
+    expect(loadConfig().claudeCode?.intercept?.picker).toBe(false);
+    expect(removed).toEqual(["cleanup"]);
+    expect(log.mock.calls.flat().join(" ")).toContain("picker:");
+  } finally { log.mockRestore(); }
+});
+
+test("picker trust forwards whether this run added trust", async () => {
+  const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const ca = ensurePickerCa(join(process.env.OPENCODEX_HOME!, "picker-test"));
+  try {
+    const result = await handleClaudeDesktopCommand(["picker", "trust"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      ensurePickerCaImpl: () => ca,
+      inspectPickerTrustImpl: async () => "untrusted",
+      trustPickerCaImpl: async () => ({ ok: true }),
+      runtimeRequestImpl: async (path, init) => {
+        calls.push({ path, body: init.body === undefined ? {} : JSON.parse(String(init.body)) as Record<string, unknown> });
+        return { ok: true, picker: pickerStatus("restart_required", "server-ca-sha") };
+      },
+    });
+    expect(result).toBe(0);
+    // GET status (which carries the server's caSha256) precedes the enable PUT.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.body).toEqual({});
+    expect(calls[1]!.body).toMatchObject({ enabled: true, persist: false, trustedLocally: true, callerAddedTrust: true });
+  } finally { log.mockRestore(); }
+});
+
+test("picker trust compensates only a connection refusal, while timeout leaves trust unknown", async () => {
+  const ca = ensurePickerCa(join(process.env.OPENCODEX_HOME!, "picker-test"));
+  const untrusted: string[] = [];
+  const baseDeps: ApplyProfileDeps = {
+    findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+    ensurePickerCaImpl: () => ca,
+    inspectPickerTrustImpl: async () => "untrusted",
+    trustPickerCaImpl: async () => ({ ok: true }),
+    untrustPickerCaImpl: async () => { untrusted.push("untrust"); return { ok: true }; },
+  };
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(await handleClaudeDesktopCommand(["picker", "trust"], {
+      ...baseDeps,
+      runtimeRequestImpl: async (_path, init) => {
+        if (init.body === undefined) return { ok: true, picker: pickerStatus("restart_required", "server-ca-sha") };
+        throw new Error("ECONNREFUSED");
+      },
+    })).toBe(1);
+    expect(untrusted).toEqual(["untrust"]);
+
+    untrusted.length = 0;
+    expect(await handleClaudeDesktopCommand(["picker", "trust"], {
+      ...baseDeps,
+      runtimeRequestImpl: async (_path, init) => {
+        if (init.body === undefined) return { ok: true, picker: pickerStatus("restart_required", "server-ca-sha") };
+        throw new RuntimeApiError("request timed out", 503, null);
+      },
+    })).toBe(1);
+    expect(untrusted).toEqual([]);
+    expect(error.mock.calls.flat().join(" ")).toContain("state unknown - run ocx claude desktop picker status");
+  } finally { error.mockRestore(); }
+});
+
+test("first-party apply delegates to the live local hub and prints its picker state", async () => {
+  const posted: Record<string, unknown>[] = [];
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await handleClaudeDesktopCommand(["apply", "--first-party"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      runtimeRequestImpl: async (_path, init) => {
+        posted.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return { ok: true, path: "/daemon", picker: pickerStatus("restart_required") };
+      },
+    })).toBe(0);
+    expect(posted).toEqual([{ mode: "first-party" }]);
+    expect(log.mock.calls.flat().join(" ")).toContain('"reason":"restart_required"');
+  } finally { log.mockRestore(); }
 });

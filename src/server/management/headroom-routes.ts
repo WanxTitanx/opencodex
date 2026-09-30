@@ -47,7 +47,7 @@ export async function handleHeadroomRoutes(ctx: ManagementContext): Promise<Resp
         if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
           return jsonResponse({ error: "baseUrl must be an http(s) URL" }, 400);
         }
-        baseUrl = parsed.origin + (parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, ""));
+        baseUrl = parsed.origin + parsed.pathname.replace(/\/+$/, "");
       } catch {
         return jsonResponse({ error: "baseUrl must be a valid URL" }, 400);
       }

@@ -17,7 +17,8 @@ import type {
   OcxUsage,
 } from "../types";
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
-import { applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
+import { ANTHROPIC_OAUTH_BETA, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
+import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import {
   applyClaudeCapabilityClamps,
   buildClaudeBillingTag,
@@ -53,6 +54,7 @@ import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 import { isReasoningEffortOmitted, modelRecordValue } from "../reasoning-effort";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
+import { rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
 function toAnthropicContentPart(p: OcxContentPart): unknown {
@@ -545,6 +547,57 @@ function anthropicKeyUsesBearer(provider: OcxProviderConfig): boolean {
   return provider.apiKeyTransport === "bearer";
 }
 
+/** The `anthropic-version` every Messages request from this proxy pins. */
+export const ANTHROPIC_API_VERSION = "2023-06-01";
+
+/**
+ * The fixed headers of every Messages request this proxy builds, before credentials. Shared by
+ * the adapter and the managed native lane so both pin the same version and client identity.
+ */
+export function anthropicBaseRequestHeaders(stream: boolean | undefined): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    "anthropic-version": ANTHROPIC_API_VERSION,
+    "Accept": stream ? "text/event-stream" : "application/json",
+    "User-Agent": "@anthropic-ai/sdk/0.74.0",
+  };
+}
+
+/** Key-auth credential placement: `x-api-key`, or a bearer when the provider asks for one. */
+export function applyAnthropicKeyAuth(headers: Record<string, string>, provider: OcxProviderConfig): void {
+  if (typeof provider.apiKey !== "string") return;
+  if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
+  else headers["x-api-key"] = provider.apiKey;
+}
+
+/**
+ * OAuth (Claude Pro/Max) credential placement: the bearer, the OAuth beta pair and the Claude
+ * Code client fingerprint. Shared by the adapter and the managed native lane.
+ */
+export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessToken: string): void {
+  headers["Authorization"] = `Bearer ${accessToken}`;
+  headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
+  // Match the real Claude Code CLI request fingerprint: a valid OAuth token with an empty
+  // header set is a non-first-party signature. (cch billing-header signing is intentionally
+  // out of scope — brittle and version-coupled.)
+  Object.assign(headers, CLAUDE_CODE_HEADERS);
+  headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(accessToken);
+  headers["x-client-request-id"] = crypto.randomUUID();
+}
+
+/** The provider's Messages endpoint, refusing a base URL with an unresolved `{placeholder}`. */
+export function resolveAnthropicMessagesUrl(provider: Pick<OcxProviderConfig, "baseUrl">): string {
+  const url = anthropicMessagesUrl(provider.baseUrl);
+  // indexOf instead of a regex: \{[^}]*\} is quadratic on brace-only input (CodeQL js/polynomial-redos).
+  const openBrace = url.indexOf("{");
+  const closeBrace = openBrace === -1 ? -1 : url.indexOf("}", openBrace);
+  const unresolvedPlaceholder = closeBrace === -1 ? undefined : url.slice(openBrace, closeBrace + 1);
+  if (unresolvedPlaceholder) {
+    throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
+  }
+  return url;
+}
+
 /** Map a Responses reasoning effort to an Anthropic extended-thinking budget (tokens, >= 1024). */
 function reasoningBudget(effort: string): number {
   switch (effort) {
@@ -556,83 +609,6 @@ function reasoningBudget(effort: string): number {
     case "medium":
     default: return 8192;
   }
-}
-
-/**
- * Claude families that moved to adaptive thinking: they 400 on `thinking.type: "enabled"`
- * ("Use \"thinking.type.adaptive\" and \"output_config.effort\" to control thinking behavior."),
- * while older families (Haiku 4.5, Sonnet 4.x, Opus <= 4.6) 400 on `adaptive` — so both wire
- * shapes must stay. Verified against api.anthropic.com: sonnet-5, fable-5, opus-4-7 and opus-4-8
- * require adaptive; haiku-4-5 and sonnet-4-5 reject it; opus-4-6/sonnet-4-6 accept both.
- */
-const ADAPTIVE_THINKING_FAMILY_MINIMUMS: Record<string, readonly [major: number, minor: number]> = {
-  sonnet: [5, 0],
-  opus: [4, 7],
-  fable: [0, 0],
-};
-
-/**
- * Family/version parse for a Claude model id, tolerant of a routing prefix.
- *
- * `parsed.modelId` is not always bare, and the slash can fall on either side.
- * A `modelMap` entry may point at a routed destination such as
- * `anthropic/claude-sonnet-5` (prefix), while a custom provider may expose a
- * native id such as `claude-sonnet-5/variant` (suffix); both survive routing's
- * known-id decoding. So this matches the segment that actually begins with
- * `claude-` rather than assuming it is the first or the last one. A capability
- * predicate that quietly returns false is worse than one that throws — the
- * request just goes out wrong.
- *
- * Minor is 1-2 digits with a non-digit lookahead so date-pinned ids
- * ("claude-opus-4-20250514") parse as minor 0 instead of minor 20250514;
- * suffixed ids ("claude-opus-4-8[1m]") still match.
- */
-function claudeFamilyVersion(modelId: string): { family: string; major: number; minor: number } | undefined {
-  // Find the segment that actually starts with `claude-`, rather than assuming it is either
-  // the first (breaks `anthropic/claude-sonnet-5`) or the last (breaks `claude-sonnet-5/variant`,
-  // where the slash carries a vendor suffix rather than a routing prefix).
-  const match = /(?:^|\/)claude-([a-z]+)-(\d+)(?:[.-](\d{1,2}))?(?!\d)/i.exec(modelId);
-  if (!match) return undefined;
-  return {
-    family: match[1]!.toLowerCase(),
-    major: Number(match[2]),
-    minor: match[3] === undefined ? 0 : Number(match[3]),
-  };
-}
-
-function meetsFamilyMinimum(
-  modelId: string,
-  minimums: Record<string, readonly [major: number, minor: number]>,
-): boolean {
-  const parsed = claudeFamilyVersion(modelId);
-  if (!parsed) return false;
-  const minimum = minimums[parsed.family];
-  if (!minimum) return false;
-  return parsed.major > minimum[0] || (parsed.major === minimum[0] && parsed.minor >= minimum[1]);
-}
-
-function usesAdaptiveThinking(modelId: string): boolean {
-  return meetsFamilyMinimum(modelId, ADAPTIVE_THINKING_FAMILY_MINIMUMS);
-}
-
-/**
- * Claude families that (a) think by DEFAULT when the request omits `thinking`,
- * and (b) accept an explicit `thinking: {type: "disabled"}` to turn it off.
- *
- * Deliberately NOT `usesAdaptiveThinking()`, which answers a different question
- * (which wire shape a family accepts). The two sets differ in both directions:
- * Fable always thinks and REJECTS an explicit disable, while Opus 4.7/4.8 use
- * the adaptive wire but leave thinking off when the field is omitted, so they
- * need no disable at all. Seeded with the family where the defect reproduces
- * (#545); widen only with vendor evidence, since a wrong entry here turns a
- * silent truncation into a 400.
- */
-const EXPLICIT_THINKING_DISABLE_FAMILY_MINIMUMS: Record<string, readonly [major: number, minor: number]> = {
-  sonnet: [5, 0],
-};
-
-function supportsExplicitThinkingDisable(modelId: string): boolean {
-  return meetsFamilyMinimum(modelId, EXPLICIT_THINKING_DISABLE_FAMILY_MINIMUMS);
 }
 
 /** `output_config.effort` accepts low|medium|high|xhigh|max — "minimal" is rejected with a 400. */
@@ -819,6 +795,9 @@ function messagesToAnthropicFormat(
             if (text) preface.push({ type: "text", text });
           } else if (part.type === "thinking") {
             const t = part as OcxThinkingContent;
+            // History minted under another serving identity (or already rejected as opaque) is not
+            // this destination's to verify: drop its opaque blocks, as the Responses passthrough does.
+            if (parsed._stripReasoningEncryptedContent === true) continue;
             // Redacted blocks replay verbatim FIRST (they preceded the visible thinking block
             // in the original stream order preserved by the bridge envelope).
             for (const data of t.redacted ?? []) {
@@ -1025,12 +1004,8 @@ async function buildClaudeSubscriptionRequest(
   provider: OcxProviderConfig,
   incoming: IncomingMeta | undefined,
   toolNames: ReturnType<typeof buildToolNameTransforms>,
-): Promise<{ url: string; method: string; headers: Record<string, string>; body: string }> {
-  const url = anthropicMessagesUrl(provider.baseUrl);
-  const unresolvedPlaceholder = url.match(/\{[^}]*\}/)?.[0];
-  if (unresolvedPlaceholder) {
-    throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
-  }
+): Promise<{ url: string; method: string; headers: Record<string, string>; body: string; tierLog?: AdapterTierMetadata }> {
+  const url = resolveAnthropicMessagesUrl(provider);
 
   const cliVersion = detectClaudeCliVersion();
   const idIn = parsed._anthropicIdentity;
@@ -1139,6 +1114,10 @@ async function buildClaudeSubscriptionRequest(
   }
 
   applyClaudeCapabilityClamps(body, wireModel);
+  // The caller's explicit tool prohibition survives the subscription envelope.
+  if (parsed.options.toolChoice === "none") body.tool_choice = { type: "none" };
+  const fastSpeed = anthropicFastSpeed(parsed, provider);
+  if (fastSpeed) body.speed = fastSpeed.value;
 
   const headers: Record<string, string> = {
     ...claudeStaticHeaders(cliVersion),
@@ -1155,9 +1134,16 @@ async function buildClaudeSubscriptionRequest(
     "x-stainless-timeout": clientHeaders["x-stainless-timeout"] ?? "600",
   };
   if (provider.headers) Object.assign(headers, provider.headers);
+  mergeAnthropicBetaHeader(headers, fastSpeed?.betas ?? []);
 
   const serialized = stampClaudeCch(JSON.stringify(body), cliVersion);
-  return { url, method: "POST", headers: orderClaudeHeaders(headers), body: serialized };
+  return {
+    url, method: "POST", headers: orderClaudeHeaders(headers), body: serialized,
+    tierLog: createAdapterTierMetadata(
+      parsed.options.tierObservation, parsed.options.tierDecision,
+      fastSpeed ? "anthropic-speed" : null, fastSpeed?.value ?? null,
+    ),
+  };
 }
 
 export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long"): ProviderAdapter {
@@ -1229,13 +1215,24 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const effectiveReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
       if (effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
         body.thinking = { type: "disabled" };
+      } else if (effectiveReasoning === "none" && usesBetweenToolsFloor(parsed.modelId)) {
+        // Sonnet 5.5 rejects `disabled`; `between_tools` is its lowest setting and turns off up-front
+        // thinking. No effort is sent: the API default (high) is inside the range it accepts.
+        body.thinking = { type: "between_tools" };
+        delete body.temperature;
+        delete body.top_p;
       } else if (typeof effectiveReasoning === "string" && effectiveReasoning !== "none") {
         if (usesAdaptiveThinking(parsed.modelId)) {
           // Adaptive-thinking models replace the token budget with an effort knob and reject
           // `thinking.type: "enabled"` outright. `max_tokens` still caps thinking plus visible
           // output, so high effort needs the same total-token headroom as budget thinking or a
           // default 8192-token request can spend everything on thought and return empty text.
-          body.thinking = { type: "adaptive" };
+          // Opus 4.7+ defaults `display` to "omitted": the stream then carries signature-only
+          // thinking blocks, so a Chat client sees minutes of heartbeats and no reasoning delta
+          // during a long think (#5824). Ask for summarized thinking unless the caller hides it.
+          body.thinking = parsed.options.hideThinkingSummary
+            ? { type: "adaptive" }
+            : { type: "adaptive", display: "summarized" };
           const effort = adaptiveEffort(effectiveReasoning);
           body.output_config = { effort };
           const explicitMaxOut = parsed.options.maxOutputTokens;
@@ -1260,6 +1257,16 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         }
         // Extended thinking disallows temperature != 1 and top_p — drop both or the API 400s.
         delete body.temperature;
+        delete body.top_p;
+      }
+
+      if (rejectsSamplingParameters(parsed.modelId)) {
+        // Opus 4.7+, Sonnet 5+ and Fable 400 on any non-default sampling parameter, with or without
+        // thinking (anthropic-model-contract.ts).
+        delete body.temperature;
+        delete body.top_p;
+      } else if (body.temperature !== undefined && body.top_p !== undefined && rejectsCombinedSampling(parsed.modelId)) {
+        // The 4.5/4.6 families take either field alone but 400 on both; temperature is the one kept.
         delete body.top_p;
       }
 
@@ -1290,6 +1297,20 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         // has to be stated before the flag has somewhere to live.
         body.tool_choice = { type: "auto" };
       }
+      const selectedToolChoice = body.tool_choice as { type?: string; name?: string } | undefined;
+      if (rejectsForcedToolChoice(parsed.modelId) && (selectedToolChoice?.type === "any" || selectedToolChoice?.type === "tool")) {
+        // Claude Opus 5.5 and Sonnet 5.5 reject forced tool use regardless of whether adaptive thinking is
+        // explicit. Anthropic's migration guidance recommends auto plus a prompt instruction;
+        // this keeps the request usable but cannot preserve the caller's forced-tool guarantee.
+        if (selectedToolChoice.type === "tool" && Array.isArray(body.tools)) {
+          // A named choice still narrows the candidate set even though the upstream cannot
+          // enforce the forced call. Do not let the compatibility downgrade widen it to every
+          // declared tool.
+          body.tools = body.tools.filter(tool => tool && typeof tool === "object" && "name" in tool
+            && (tool as { name?: unknown }).name === selectedToolChoice.name);
+        }
+        body.tool_choice = { type: "auto" };
+      }
       // disable_parallel_tool_use is nested in tool_choice and caps the model at one
       // tool call for auto/any/tool. Under type "none" tool use is already off, so the
       // flag is irrelevant there, and with no tools on the wire no tool_choice exists.
@@ -1302,24 +1323,15 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         body.tool_choice = { ...settledToolChoice, disable_parallel_tool_use: true };
       }
 
-      const url = anthropicMessagesUrl(provider.baseUrl);
-      const unresolvedPlaceholder = url.match(/\{[^}]*\}/)?.[0];
-      if (unresolvedPlaceholder) {
-        throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
-      }
+      const url = resolveAnthropicMessagesUrl(provider);
       // Anthropic fast mode: `speed` is only accepted beside its beta; without it the API
       // answers 400 "speed: Extra inputs are not permitted". The beta is merged below, after
       // any header override, so a request never carries one without the other.
       const fastSpeed = anthropicFastSpeed(parsed, provider);
       if (fastSpeed) body.speed = fastSpeed.value;
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "Accept": parsed.stream ? "text/event-stream" : "application/json",
-        "User-Agent": "@anthropic-ai/sdk/0.74.0",
-      };
-      if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
-      else headers["x-api-key"] = provider.apiKey;
+      const headers = anthropicBaseRequestHeaders(parsed.stream);
+      if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey);
+      else applyAnthropicKeyAuth(headers, provider);
       if (provider.headers) Object.assign(headers, provider.headers);
       mergeAnthropicBetaHeader(headers, fastSpeed?.betas ?? []);
 
@@ -1403,7 +1415,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
 
       try {
       for await (const record of decodeServerSentEvents(response.body, { includeComments: true, translatorBudget: budget })) {
-        if (record.kind === "comment") {
+        // Anthropic's streaming API sends `event: ping` / `{"type":"ping"}` records alongside
+        // SSE comments ("Event streams may also include any number of ping events"). Both mean the
+        // upstream is still alive, so a long silent thinking block must not look like a dead
+        // upstream to the bridge stall watchdog (#5707).
+        if (record.kind === "comment" || record.event === "ping") {
           yield { type: "heartbeat" };
           continue;
         }
@@ -1529,6 +1545,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
               }
               case "message_stop": {
                 yield* emitDone();
+                break;
+              }
+              case "ping": {
+                // A data-only `{"type":"ping"}` record carries no SSE `event:` line, so the
+                // liveness check above cannot see it (#5707).
+                yield { type: "heartbeat" };
                 break;
               }
               case "error": {

@@ -84,12 +84,47 @@ export interface LivenessIo {
   createChallengeFn?: () => string;
 }
 
+/**
+ * Operator override for the per-probe fetch ceilings below (`OCX_PROBE_TIMEOUT_MS`),
+ * integer milliseconds in [1, MAX_PROBE_TIMEOUT_MS].
+ *
+ * Some hosts put a security layer (content filter, EDR network extension) in front of
+ * loopback TCP that adds a fixed per-connect cost, measured at about one second on an
+ * affected macOS machine. The shipped 750 ms probe then aborts before a healthy proxy can
+ * answer, and every CLI liveness consumer reports the proxy as down while a direct
+ * `curl /healthz` succeeds.
+ *
+ * The override only raises: each ceiling keeps its shipped floor (750 ms for the shared
+ * default, 1500 ms for the stop/start ownership budgets that guard against a duplicate
+ * proxy, #764, #5004), so a small value can never shorten them. Values above the 30 s
+ * ceiling are ignored rather than clamped: a stop multiplies its budget by the attempt
+ * count, and a typo must not turn a stop into a wait of minutes or days. Parsed once at
+ * module load; anything malformed falls back to the defaults and never breaks startup.
+ */
+export const MAX_PROBE_TIMEOUT_MS = 30_000;
+const SHARED_PROBE_FLOOR_MS = 750;
+const OWNERSHIP_PROBE_FLOOR_MS = 1500;
+
+export function parseProbeTimeoutOverrideMs(raw: string | undefined): number | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return undefined;
+  const n = Number(trimmed);
+  return n > 0 && n <= MAX_PROBE_TIMEOUT_MS ? n : undefined;
+}
+
+/** The ceiling for a probe whose shipped value is `floorMs`, raised by a valid override only. */
+export function probeCeilingMs(floorMs: number, override: number | undefined): number {
+  return Math.max(floorMs, override ?? 0);
+}
+
+const probeTimeoutOverrideMs = parseProbeTimeoutOverrideMs(process.env.OCX_PROBE_TIMEOUT_MS);
+
 /** Default per-probe fetch ceiling shared by liveness and readiness probes. */
-export const DEFAULT_PROBE_TIMEOUT_MS = 750;
+export const DEFAULT_PROBE_TIMEOUT_MS = probeCeilingMs(SHARED_PROBE_FLOOR_MS, probeTimeoutOverrideMs);
 
 /** Default probe options for service stop / orphan cleanup — a just-bound proxy can miss a single 750ms probe. */
 export const SERVICE_STOP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> = {
-  timeoutMs: 1500,
+  timeoutMs: probeCeilingMs(OWNERSHIP_PROBE_FLOOR_MS, probeTimeoutOverrideMs),
   attempts: 3,
 };
 
@@ -105,7 +140,7 @@ export const SERVICE_STOP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> =
  * the stop path already uses for the mirror-image decision.
  */
 export const START_OWNERSHIP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> = {
-  timeoutMs: 1500,
+  timeoutMs: probeCeilingMs(OWNERSHIP_PROBE_FLOOR_MS, probeTimeoutOverrideMs),
   attempts: 3,
 };
 
@@ -145,6 +180,30 @@ export interface LiveProxy {
    * `LivenessIo.acceptPackageTreeFenced`.
    */
   packageTreeFenced?: true;
+}
+
+/**
+ * A /healthz identity proves only that a proxy holds the port. Before a destructive orphan stop,
+ * require that listener to prove possession of this home's runtime-record secret as well.
+ *
+ * The verdict is three-valued on purpose. "proven" is the only answer that authorizes the
+ * caller's action; "refuted" means the answer was definitive (no record, a pid/port
+ * mismatch, or a failed proof); "indeterminate" means transport, deadline, or an
+ * unattestable record left the question open, which a shared-write decision must treat
+ * the same as a live owner it simply could not verify (#6198).
+ */
+export type HomeOwnershipProof = "proven" | "refuted" | "indeterminate";
+
+export async function proveLiveProxyOwnedByHome(live: LiveProxy, io: LivenessIo = {}): Promise<HomeOwnershipProof> {
+  if (live.pid === null) return "indeterminate";
+  return attestFencedIdentity(
+    `http://${probeHostname(live.hostname)}:${live.port}/healthz`,
+    live.port,
+    live.pid,
+    io,
+    io.fetchFn ?? directLocalHttpFetch,
+    io.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -207,31 +266,50 @@ async function attestFencedIdentity(
   io: LivenessIo,
   fetchFn: LivenessFetch,
   timeoutMs: number,
-): Promise<boolean> {
+): Promise<HomeOwnershipProof> {
   const readRuntimeFn = io.readRuntimeFn ?? readRuntimePort;
   let record: ReturnType<NonNullable<LivenessIo["readRuntimeFn"]>>;
   try {
     record = readRuntimeFn(pid);
   } catch {
-    return false;
+    return "indeterminate";
   }
   // The typed seam omits the secret; the production record (readRuntimePort) carries it.
   const secret: unknown = record ? Reflect.get(record, "attestationSecret") : undefined;
-  if (!record || record.pid !== pid || record.port !== port || typeof secret !== "string") return false;
+  if (!record || record.pid !== pid || record.port !== port) return "refuted";
+  if (typeof secret !== "string" || secret.length === 0) return "indeterminate";
   const challenge = (io.createChallengeFn ?? createLocalAttestationChallenge)();
-  try {
-    const res = await fetchFn(url, {
-      headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: challenge },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    const body = (await res.json().catch(() => null)) as HealthzIdentity | null;
-    // The second answer must still be the same fenced (or by now healthy) process.
-    if (!isOpencodexHealthz(body) && !isPackageTreeFencedHealthz(body)) return false;
-    if (body?.pid !== pid) return false;
-    return verifyLocalAttestationProof(secret, challenge, pid, port, res.headers.get(LOCAL_ATTESTATION_PROOF_HEADER));
-  } catch {
-    return false;
+  // One proof failure is definitive and never retried; a transport failure only means
+  // the listener did not answer yet, so it gets the same bounded retry the identity
+  // probe uses — "did not answer" is not "not ours" (#6198). The challenge is minted
+  // once: a retried attempt proves the same fresh nonce, not a replayed proof.
+  const sleepFn = io.sleepFn ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const nowFn = io.nowFn ?? Date.now;
+  const requestedAttempts = Math.trunc(io.attempts ?? 1);
+  const attempts = Number.isNaN(requestedAttempts)
+    ? 1
+    : Math.max(1, Math.min(requestedAttempts, 5));
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const remainingMs = io.deadlineAt === undefined ? timeoutMs : Math.min(timeoutMs, io.deadlineAt - nowFn());
+    if (remainingMs <= 0) return "indeterminate";
+    try {
+      const res = await fetchFn(url, {
+        headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: challenge },
+        signal: AbortSignal.timeout(remainingMs),
+      });
+      const body = (await res.json().catch(() => null)) as HealthzIdentity | null;
+      // The second answer must still be the same fenced (or by now healthy) process.
+      if (!isOpencodexHealthz(body) && !isPackageTreeFencedHealthz(body)) return "refuted";
+      if (body?.pid !== pid) return "refuted";
+      return verifyLocalAttestationProof(secret, challenge, pid, port, res.headers.get(LOCAL_ATTESTATION_PROOF_HEADER))
+        ? "proven"
+        : "refuted";
+    } catch {
+      if (attempt >= attempts) return "indeterminate";
+      await sleepFn(100);
+    }
   }
+  return "indeterminate";
 }
 
 /** A bounded version string safe to carry beyond the untrusted health response. */
@@ -266,7 +344,7 @@ export function isConnectionRefused(error: unknown): boolean {
   return visit(error, 0);
 }
 
-async function classifyHealthz(
+export async function classifyHealthz(
   url: string,
   fetchFn: LivenessFetch,
   timeoutMs: number,
@@ -340,7 +418,7 @@ export async function proxyIdentityAt(
         if (opts.expectedPid !== undefined && fencedPid !== opts.expectedPid) return null;
         const attestMs = io.deadlineAt === undefined ? baseTimeoutMs : Math.min(baseTimeoutMs, io.deadlineAt - nowFn());
         if (attestMs <= 0) return null;
-        if (!(await attestFencedIdentity(url, port, fencedPid, io, fetchFn, attestMs))) return null;
+        if ((await attestFencedIdentity(url, port, fencedPid, io, fetchFn, attestMs)) !== "proven") return null;
         const fencedVersion = isHealthzVersion(fenced?.version) ? fenced!.version as string : undefined;
         return {
           pid: fencedPid,

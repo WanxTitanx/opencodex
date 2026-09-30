@@ -24,6 +24,12 @@ doit choisir parmi plusieurs cibles.
 
 Les requêtes de modèle, d’image, de vidéo et de recherche contenant des identifiants ne suivent pas automatiquement les redirections HTTP, même vers la même origine. Configurez l’URL finale de l’API plutôt qu’un alias qui redirige. Le serveur ne renvoie ni les identifiants ni le corps de la requête à la destination d’une redirection. Chaque chemin conserve sa gestion des erreurs ou son relais existant ; les routes Responses natives et compact peuvent renvoyer le 3xx et le `Location` d’origine au client. Le comportement de redirection du client est distinct de cette politique de transport du serveur.
 
+## xAI policy refusals
+
+Certains refus xAI de Chat Completions arrivent en HTTP 403 avec une phrase de refus exacte, par exemple `I can't help with that request.`, au lieu d'un HTTP 200 avec `finish_reason: content_filter`. Codex traite un 403 comme un échec de transport : le tour utilisateur n'est pas enregistré et la même requête est renvoyée.
+
+Sur une requête Responses hors combo, OpenCodex réécrit ce 403 de la liste autorisée en réponse Responses HTTP 200 avec `status: "incomplete"` et `incomplete_details.reason: "content_filter"`. La réécriture s'applique au chemin de l'adaptateur openai-chat et au passthrough openai-responses (OAuth grok-4.6 / grok-4.5). Le streaming utilise la même limite incomplete. Un corps 403 vide ou fait d'espaces reste une erreur. Les 403 d'abonnement, de crédits, de droits d'accès et `not allowed to use this model` restent des erreurs. Le basculement de combo voit toujours le HTTP 403 d'origine.
+
 ## Présentation du point de terminaison
 
 | Espace client | Point de terminaison | Résultat non-stream réussi | Résultat de flux ou de socket réussi |
@@ -68,6 +74,16 @@ Avec `stream: true`, la réponse est `text/event-stream`. Le pont émet des év�
 
 Avec `stream: false` ou pas de `stream`, les mêmes événements d'adaptateur sont collectés dans une seule réponse JSON
 objet. Les deux formulaires préservent le modèle sélectionné, les éléments de sortie, l'état du terminal et l'utilisation.
+
+La route canonique ChatGPT Codex n'accepte que SSE en amont ; seul l'appel amont utilise donc
+`stream: true`. OpenCodex valide le flux terminal dans des limites bornées, puis le replie dans la
+forme JSON demandée par le client sans modifier une valeur `store` explicite. Un échec de validation
+renvoie une erreur plutôt qu'un JSON partiel avec HTTP 200. Les limites sont de 4 Mio par trame,
+32 Mio pour le transcript et la source de reconstruction, 100 000 trames SSE et 10 000 éléments de
+sortie reconstruits. `stallTimeoutSec` régit le premier octet du corps et les silences suivants.
+Lorsqu'il vaut `0`, y compris par défaut pour un upstream local, il n'expire pas immédiatement : seul
+le plafond indépendant de 15 minutes pour le tour mis en mémoire reste actif. Les clients streaming
+restent inchangés.
 
 Les trames SSE des réponses destinées au client sont limitées à 4 Mio par trame, mesuré en octets bruts avant la
 SSE délimiteur de bloc. Sur HTTP, une trame amont non terminée qui dépasse la limite échoue fermée

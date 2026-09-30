@@ -8,6 +8,7 @@ export {
   dottedToolName,
   namespacedToolName,
   normalizeDeclaredToolName,
+  isCodeModeMcpDirectName,
   toolChoiceAliases,
   createToolChoiceResolver,
   toolChoiceCandidates,
@@ -61,6 +62,8 @@ export type {
 } from "./types/request";
 
 export type {
+  OcxApiSurfacesConfig,
+  OcxProtocolsConfig,
   OcxClaudeCodeConfig,
   OcxClaudeDesktopFamily,
   OcxClaudeDesktopAssignment,
@@ -76,8 +79,12 @@ export type {
   OcxConnectedClientId,
   OcxClientConnectionConfig,
   OcxConfig,
+  SkillsCatalogRefresh,
+  OcxSkillsConfig,
+  CodexLowQuotaProtectionConfig,
   OcxAccountPoolRotationStrategy,
   OcxAccountPoolQuotaWindow,
+  OcxComboCooldownWaitPolicy,
   OcxComboStrategy,
   OcxComboDefaultEffort,
   OcxComboDefaultEffortMode,

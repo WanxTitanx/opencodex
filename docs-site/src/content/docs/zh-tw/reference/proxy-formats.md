@@ -18,6 +18,12 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 
 攜帶憑證的模型、圖片、影片和搜尋請求不會自動跟隨 HTTP 重新導向，包括同源重新導向。請設定最終上游 API URL，而非會重新導向的別名。伺服器不會向重新導向目標再次傳送憑證或請求內文。各回應處理路徑保留原有的錯誤處理或轉送行為；原生 Responses 和 compact 路徑仍可向用戶端回傳原始 3xx 與 `Location`。用戶端的重新導向行為與此伺服器傳輸政策屬於不同邊界。
 
+## xAI policy refusals
+
+部分 xAI Chat Completions 拒絕不是以 HTTP 200 加 `finish_reason: content_filter` 回傳，而是以 HTTP 403 加上一句完全相符的拒絕語句（例如 `I can't help with that request.`）回傳。Codex 把 403 視為傳輸失敗，因此使用者回合不會被記錄，同一個請求會被重送。
+
+在非 combo 的 Responses 請求上，OpenCodex 會把這種在允許清單中的 403 改寫為 HTTP 200 的 Responses 內容，帶有 `status: "incomplete"` 與 `incomplete_details.reason: "content_filter"`。改寫同時作用於 openai-chat 轉接器路徑與 openai-responses 直通（grok-4.6 / grok-4.5 OAuth）。串流使用相同的 incomplete 邊界。空白的 403 本文仍是錯誤。訂閱、點數、權限與 `not allowed to use this model` 的 403 仍是錯誤。Combo failover 仍看到原始的 HTTP 403。
+
 ## 端點概覽
 
 | 客戶端介面 | 端點 | 成功的非串流結果 | 成功的串流或 socket 結果 |
@@ -56,6 +62,13 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 在 `stream: true` 時，回應為 `text/event-stream`。橋接發出 Responses 事件如 `response.created`、output-item 與 text/tool delta，以及恰好一個終端 `response.completed`、`response.failed` 或 `response.incomplete` 事件。正常串流以 `data: [DONE]` 結束。
 
 在 `stream: false` 或無 `stream` 時，相同的 adapter 事件被收集為一個 Responses JSON 物件。兩種形式都保留所選模型、輸出項目、終端狀態與 usage。
+
+canonical ChatGPT Codex 路由的上游只接受 SSE，因此僅對上游請求使用 `stream: true`。OpenCodex
+會在有界限制內驗證終端串流，再將其折疊成客戶端要求的 JSON 形式；明確的 `store` 值不會改變。
+驗證失敗時會傳回錯誤，而不會以 HTTP 200 傳回部分 JSON。限制為每個 frame 4 MiB、transcript
+與重建來源各 32 MiB、100,000 個 SSE frame，以及 10,000 個重建 output item。
+`stallTimeoutSec` 同時控制第一個 body byte 與後續靜默間隔；當它是 `0`，或因本機 upstream
+預設停用時，不會立即逾時，只保留獨立的 15 分鐘整體上限。串流客戶端的行為不變。
 
 每個終端 Responses usage 物件都包含兩個 detail 物件，即使供應商未回報那些細節：
 

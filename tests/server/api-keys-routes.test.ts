@@ -12,6 +12,7 @@ import { usageLogPath } from "../../src/usage/log";
 import { refreshUserCostOverlays } from "../../src/usage/user-cost-overlays";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 
 // The /api/keys handlers had no direct test before this file: GET masking, POST
 // persistence and DELETE semantics were only ever exercised through a CLI fixture
@@ -264,7 +265,7 @@ describe("POST /api/keys", () => {
   });
 
   test("the POST handler no longer reads provider API keys", async () => {
-    const source = readFileSync(new URL("../../src/server/management/oauth-account-routes.ts", import.meta.url), "utf-8");
+    const source = readFileSync(repoPath("src/server/management/oauth-account-routes.ts"), "utf-8");
     const start = source.indexOf('url.pathname === "/api/keys" && req.method === "POST"');
     const end = source.indexOf('url.pathname === "/api/keys" && req.method === "PATCH"');
     expect(start).toBeGreaterThan(-1);
@@ -272,7 +273,15 @@ describe("POST /api/keys", () => {
     const handler = source.slice(start, end);
     expect(handler).not.toContain("p.apiKey");
     expect(handler).not.toContain("CryptoHasher");
-    expect(handler).toContain("randomBytes(20)");
+    expect(handler).toContain("issueApiKeyInProcess(config, name, fields)");
+    const issuerStart = source.indexOf("export function issueApiKeyInProcess(");
+    const issuerEnd = source.indexOf("export function revokeApiKeyInProcess(");
+    expect(issuerStart).toBeGreaterThan(-1);
+    expect(issuerEnd).toBeGreaterThan(issuerStart);
+    const issuer = source.slice(issuerStart, issuerEnd);
+    expect(issuer).not.toContain("p.apiKey");
+    expect(issuer).not.toContain("CryptoHasher");
+    expect(issuer).toContain("randomBytes(20)");
   });
 
   test.each([

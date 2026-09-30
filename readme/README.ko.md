@@ -8,23 +8,22 @@
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X에서 @claudeebum 팔로우"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/github/v/release/lidge-jun/opencodex?label=desktop&logo=github&color=24292f" alt="최신 데스크톱 릴리스"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node version">
 </p>
 
-<p align="center">
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-macos.svg" alt="macOS용 OpenCodex 다운로드" width="220"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-windows.svg" alt="Windows용 OpenCodex 다운로드" width="220"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-linux.svg" alt="Linux용 OpenCodex 다운로드" width="220"></a>
-</p>
-<p align="center"><sub>데스크톱 앱 (베타): macOS 유니버설 <code>.dmg</code> · Windows x64 <code>.msi</code> · Linux x86_64 <code>.AppImage</code> / <code>.deb</code>. 터미널이 더 편하다면 CLI를 설치하세요:</sub></p>
-
 ```bash
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="macOS용 다운로드 (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Windows용 다운로드 (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Linux용 다운로드 (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Linux용 다운로드 (.deb)"></a>
+</p>
 
 <table>
 <tr>
@@ -90,7 +89,20 @@ DeepSeek, Kimi, Qwen, Ollama를 비롯한 어떤 LLM이든 Codex, Claude Code, C
 
 ## 빠른 시작
 
-### 데스크톱 앱 (베타)
+### 개인 설치 (CLI)
+
+```bash
+npm install -g @bitkyc08/opencodex   # Node 18+; Bun 런타임은 자동으로 번들됩니다
+ocx start                         # 프록시 + 대시보드: localhost:10100
+```
+
+백그라운드로 돌리려면 `ocx service`를 쓰세요.
+
+**http://localhost:10100**을 열고 웹 대시보드에서 전부 설정하세요. 프로바이더 추가(내장 40개 이상,
+또는 OpenAI 호환 엔드포인트), 모델 선택, 계정 관리까지 모두 여기서 합니다. `ocx gui`로 대시보드를 언제든 다시 엽니다.
+
+<details>
+<summary><b>데스크톱 앱 (베타)</b></summary>
 
 데스크톱 앱은 같은 프록시와 대시보드를 네이티브 창에 담은 것으로, 트레이와 번들된 `ocx`를 갖춥니다.
 이미 실행 중인 프록시에 붙거나 번들된 프록시를 시작하며, 대시보드는 프록시 포트에서 열립니다
@@ -112,17 +124,7 @@ DeepSeek, Kimi, Qwen, Ollama를 비롯한 어떤 LLM이든 Codex, Claude Code, C
 [macOS 메뉴 막대 앱 가이드](https://opencodex.me/ko/guides/macos-menu-bar/)에서 첫 실행 안내를 볼 수 있고,
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)에는 디스크에 쓰는 모든 항목이 정리되어 있습니다.
 
-### 개인 설치 (CLI)
-
-```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; Bun 런타임은 자동으로 번들됩니다
-ocx start                         # 프록시 + 대시보드: localhost:10100
-```
-
-백그라운드로 돌리려면 `ocx service`를 쓰세요.
-
-**http://localhost:10100**을 열고 웹 대시보드에서 전부 설정하세요. 프로바이더 추가(내장 40개 이상,
-또는 OpenAI 호환 엔드포인트), 모델 선택, 계정 관리까지 모두 여기서 합니다. `ocx gui`로 대시보드를 언제든 다시 엽니다.
+</details>
 
 ### ChatGPT 계정 풀
 
@@ -150,6 +152,10 @@ Codex Desktop 로그인처럼 다른 계정이 소진된 뒤에만 쓰고 싶은
 <tr>
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td><a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a>의 후원에 감사합니다. PackyCode는 안정적인 고성능 API 릴레이 프로바이더로, Claude Code, Codex, Gemini 등의 릴레이를 제공합니다. 자동 failover, 스마트 라우팅, 무제한 동시성으로 AI를 실제 생산성 도구로 만듭니다. <a href="https://www.packyapi.com/register?aff=k5KT">이 링크로 등록</a>하고 바로 시작하세요. Add provider 선택기에서 <code>PackyCode</code>를 고르거나 <code>ocx provider add packycode</code>를 실행하세요.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
+</tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td><a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a>의 후원에 감사합니다. TokenLab은 코딩 에이전트에게 주요 모델용 API 키 하나를 제공하며, OpenAI Responses와 Chat Completions, Anthropic Messages, Gemini 네이티브 API 형식을 스트리밍과 도구 호출까지 지원합니다. MCP 서버와 에이전트 Skills도 제공해 쉽게 연동할 수 있습니다. 전달 모드를 고르고 쓴 만큼 결제하세요. Add provider 선택기에서 <code>TokenLab</code>을 고르거나 <code>ocx provider add tokenlab</code>을 실행하세요.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
 </tr>
 </tbody>
 </table>
@@ -297,14 +303,14 @@ CLI 설치에는 [Node](https://nodejs.org) 18 이상이 필요하고, 데스크
 <details>
 <summary>메모리 소유권 상세</summary>
 
-OpenCodex는 프로세스가 붙잡고 있는 상태 36종을 추적합니다. 각각에 문서화된 한도가 있습니다:
+OpenCodex는 프로세스가 붙잡고 있는 상태를 아래 항목에서 추적합니다. 각각에 문서화된 한도가 있습니다:
 
-- **유지 저장소 12개**(요청 로그, debug ring, image cache, model cache, vision 설명, cursor blob,
+- **유지 저장소 14개**(요청 로그, debug ring, image cache, model cache, vision 설명, cursor blob,
   responses continuation 등)는 바이트 단위로 집계되며, 앱이 소유한 메모리 예산(기본 256 MiB)이
-  eviction합니다.
+  eviction합니다. 단, native control replay 저장소는 고정되어 eviction되지 않습니다.
 - **관측 버퍼 4개**(translator accumulator, image/OAuth/Grok tail)는 진행 중 바이트 압력을 감시만
   하고 eviction하지 않습니다.
-- **state-store 등록 24개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
+- **state-store 등록 28개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
   낡은 프로바이더/계정 키를 지웁니다.
 - **경로·fingerprint 메모**(워크스페이스 메타데이터, hardened identity, 설치 salt, mode-hint
   capability)는 삽입 순서 LRU cap(8–128개)을 씁니다.
@@ -330,6 +336,18 @@ codex -m "ollama/llama3" "이 함수를 리팩터링해 줘"
 `provider/` 접두사를 빼면 기본 프로바이더를 쓰거나 모델명 패턴으로 자동 매칭합니다. `/`가 들어 있는
 프로바이더 모델 id는 안쪽 슬래시를 `-`로 alias해서 노출하고, 슬래시를 그대로 둔 원본 형태도 계속
 동작합니다. 자세한 내용은 [모델 라우팅 문서](https://opencodex.me/ko/guides/model-routing/)를 보세요.
+
+### JEV Auto 라우팅 (선택)
+
+TypeSafe JEV는 명시적으로 켠 Combo에서 첫 모델과 reasoning effort를 고를 수 있습니다. 일반 모델
+선택기와 직접 라우트는 그대로입니다. 자격 증명은 `ocx login jev`, **Providers → TypeSafe JEV → Add API key**,
+또는 `TYPESAFE_API_KEY`/`JEV_API_KEY`로 추가합니다. 그다음 **Models → Combos → Create JEV Auto**에서
+허용할 대상 모델을 고르고, 대상마다 JEV가 고를 수 있는 effort를 체크하세요. effort 설정을 건드리지
+않은 대상은 그 모델이 현재 광고하는 effort를 모두 허용합니다.
+
+JEV는 `jev-auto`에서만, 논리적 모델 호출당 한 번만 호출됩니다. 자격 증명이 없거나 네트워크가
+실패하거나 결정이 잘못되면 현재 적격인 첫 대상으로 fail-open하며, 호출자 취소는 여전히 요청을
+취소합니다. 자동 테스트는 모의 TypeSafe 엔드포인트를 쓰며 실제 JEV 계정은 검증하지 않습니다.
 
 ## 프로바이더 및 adapter
 

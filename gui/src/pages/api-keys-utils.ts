@@ -31,11 +31,23 @@ export interface ApiKeyEntry {
   /** Always present from the server; zeroes are a real answer. Whether anything
    *  is attributable at all is the response-level `attributionSince`. */
   usage: ApiKeyUsage;
-  quota: ApiKeyQuota;
-  spend: ApiKeySpend;
+  /** Older servers and cached rows can predate the optional quota extension. */
+  quota?: ApiKeyQuota;
+  spend?: ApiKeySpend;
   quotaResetAt?: string;
   allowedModels?: string[];
   allowedProviders?: string[];
+}
+
+export type ApiKeyQuotaEntry = ApiKeyEntry & { quota: ApiKeyQuota; spend: ApiKeySpend };
+
+/** Missing quota telemetry is unavailable, not evidence that a key spent zero. */
+export function hasApiKeyQuota(entry: ApiKeyEntry): entry is ApiKeyQuotaEntry {
+  const { quota, spend } = entry;
+  if (!quota || !spend) return false;
+  return [quota.dailyUsd, quota.weeklyUsd, quota.monthlyUsd,
+    spend.dailyUsd, spend.weeklyUsd, spend.monthlyUsd, spend.unpricedRequests]
+    .every(value => typeof value === "number" && Number.isFinite(value) && value >= 0);
 }
 
 /** A quota the GUI can render. Coercing a malformed one to zeroes would claim
@@ -118,6 +130,35 @@ export function isApiAuthMatrix(value: unknown): value is ApiAuthMatrixRow[] {
 
 /** Shared by both key-name inputs; the server rejects anything longer. */
 export const API_KEY_NAME_MAX_LENGTH = 64;
+
+/** Who decided a surface's state; mirrors `ApiSurfaceSource` in src/protocols/settings.ts. */
+export type ApiSurfaceSource = "fixed" | "api-surfaces" | "claude-code-legacy" | "invalid";
+export interface ApiSurfaceInfo {
+  enabled: boolean;
+  source: ApiSurfaceSource;
+}
+export type ApiSurfacesInfo = Record<GatewayInboundProtocol, ApiSurfaceInfo>;
+
+const SURFACE_SOURCES = new Set<ApiSurfaceSource>(["fixed", "api-surfaces", "claude-code-legacy", "invalid"]);
+const SURFACE_NAMES = ["responses", "chat", "messages"] as const satisfies readonly GatewayInboundProtocol[];
+
+/**
+ * `surfaces` from the keys payload, or `undefined` when an older server sent none or the value
+ * is unusable. Callers fall back to the pre-surfaces display rather than inventing a state.
+ */
+export function parseApiSurfaces(value: unknown): ApiSurfacesInfo | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const surfaces = {} as ApiSurfacesInfo;
+  for (const name of SURFACE_NAMES) {
+    const surface = record[name];
+    if (!surface || typeof surface !== "object" || Array.isArray(surface)) return undefined;
+    const { enabled, source } = surface as Record<string, unknown>;
+    if (typeof enabled !== "boolean" || !SURFACE_SOURCES.has(source as ApiSurfaceSource)) return undefined;
+    surfaces[name] = { enabled, source: source as ApiSurfaceSource };
+  }
+  return surfaces;
+}
 
 export interface ApiEndpointInfo {
   baseUrl: string;

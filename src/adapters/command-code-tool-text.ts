@@ -22,6 +22,13 @@ import { validatesRestoredValue } from "./command-code-restored-schema";
  * A text block that opens with `<tool_call>` is therefore held instead of streamed. It is dropped
  * when a native call proves it is a duplicate, or restored on an eligible clean MiMo finish when
  * it names a declared tool with arguments that fit its schema. Other markup is released unchanged.
+ * MiMo can also append the markup after ordinary prose inside one text block. A marker that
+ * follows prose can never become a call: its envelope is still held — a matching native call
+ * strips it as an echo — and otherwise it is released as the presentation text it is.
+ * A leading bare envelope remains eligible under the declared-tool rules.
+ * A malformed envelope that still opens and closes around a declared function name, but that the
+ * strict parser rejects, is dropped instead of released when the native call for that same function
+ * arrives, and on the clean-finish path, so the echo never reaches the client.
  * Later text waits behind unresolved markup within the same byte bound.
  */
 
@@ -79,6 +86,21 @@ export function parseToolCallMarkup(text: string): ToolCallMarkup | undefined {
 
 function tryJson(value: string): unknown {
   try { return JSON.parse(value); } catch { return undefined; }
+}
+
+/**
+ * The declared function name of an envelope echo the strict parser rejected, or undefined when the
+ * text is anything else: malformed parameter tags, a missing `</function>`, garbage inside the body.
+ * Opening and closing as an envelope with a known function name is enough to keep it off the client
+ * once the native duplicate call for that same name — which carries the canonical execution —
+ * arrives; a native call for another tool says nothing about this envelope.
+ */
+function looseEnvelopeName(text: string, declared: CommandCodeDeclaredTools | undefined): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith(TOOL_CALL_MARKER) || !trimmed.endsWith("</tool_call>")) return undefined;
+  if (trimmed.slice(TOOL_CALL_MARKER.length).includes(TOOL_CALL_MARKER)) return undefined;
+  const fn = /<function=([^>\s]+)>/.exec(trimmed);
+  return fn !== null && (declared?.has(fn[1]!) ?? false) ? fn[1]! : undefined;
 }
 
 function deepEqual(left: unknown, right: unknown): boolean {
@@ -215,8 +237,14 @@ interface TextBlock {
   state: "probing" | "held" | "queued" | "dropped" | "streaming";
   ended: boolean;
   interrupted: boolean;
-  /** Tool inputs open when the block started; the native call that duplicates it is one of them. */
+  /**
+   * Tool inputs the block could echo: those open when it started, plus, for a post-prose tail,
+   * at most one later input of the envelope's own tool. The block waits only while one of them
+   * is still open.
+   */
   candidates: Set<string>;
+  /** The one later input a post-prose tail admitted as a candidate, if any. */
+  lateCandidate?: string;
 }
 
 interface TextChunk {
@@ -251,7 +279,10 @@ const encoder = new TextEncoder();
 export class CommandCodeToolTextFilter {
   private readonly openInputs = new Map<string, string>();
   private readonly blocks = new Map<string, TextBlock>();
-  /** Only nonempty blocks still deciding whether their text is markup need boundary visits. */
+  /**
+   * Only blocks still deciding whether their text is markup (state "probing") need boundary visits;
+   * a held block is deliberately absent, so no interleaved event can interrupt it.
+   */
   private readonly activeProbes = new Map<string, TextBlock>();
   /** Held blocks in arrival order, including ended ones awaiting a verdict. */
   private held: TextBlock[] = [];
@@ -272,7 +303,19 @@ export class CommandCodeToolTextFilter {
 
   toolInputStart(id: unknown, name: unknown): AdapterEvent[] {
     const events = this.breakOpenBlocks();
-    if (typeof id === "string" && typeof name === "string") this.openInputs.set(id, name);
+    if (typeof id === "string" && typeof name === "string") {
+      this.openInputs.set(id, name);
+      // A post-prose echo can precede the start of the native input it duplicates. An echo
+      // duplicates one call, so a complete tail admits one later input of its own tool and no
+      // other: unrelated or repeated starts cannot keep extending the wait. Once every candidate
+      // closes without a match, matchNative releases the tail as text.
+      for (const block of this.held) {
+        if (!block.interrupted || block.candidates.size === 0 || block.lateCandidate !== undefined) continue;
+        if (looseEnvelopeName(block.markupParts.join(""), this.declared) !== name) continue;
+        block.lateCandidate = id;
+        block.candidates.add(id);
+      }
+    }
     return events;
   }
 
@@ -283,6 +326,13 @@ export class CommandCodeToolTextFilter {
     for (const [key, block] of this.activeProbes) {
       this.queueOperations++;
       if (key === exceptKey) continue;
+      // Guard only: a held block is not tracked here (textDelta adds probing blocks and drops them
+      // from the map on the transition to held). It must stay held until settle, in arrival order —
+      // interrupting it on interleaved events (reasoning deltas, other blocks, the native call
+      // itself) cleared complete and malformed envelopes alike and released the echoed call as text.
+      // The queued-byte bound (makeRoom) still caps memory and wait, flushing everything as text if a
+      // held envelope never resolves while the stream keeps producing.
+      if (block.state !== "probing") continue;
       this.activeProbes.delete(key);
       block.interrupted = true;
       block.state = "queued";
@@ -310,6 +360,26 @@ export class CommandCodeToolTextFilter {
       block = { id: key, markupParts: [], probe: "", bytes: 0, state: "probing", ended: false, interrupted: false, candidates: new Set(this.openInputs.keys()) };
       this.blocks.set(key, block);
     }
+    // Probe before retaining so the state transition precedes the marker scan: a delta that
+    // carries prose AND a marker must split this visit, not a later one.
+    if (block.state === "probing") {
+      this.probeBlockText(block, text);
+      if (block.state === "probing") this.activeProbes.set(key, block);
+      else this.activeProbes.delete(key);
+    }
+    // Only a bare text block can open protocol markup. Once prose has committed the block, a
+    // marker inside the delta starts a held tail instead: it never restores a call, but a
+    // matching native call still strips the echo and an unmatched one releases as text.
+    if (block.state === "streaming" || block.state === "queued") {
+      const markerStart = this.findFreshMarker(text);
+      if (markerStart !== undefined) {
+        return [
+          ...boundaryEvents,
+          ...this.enqueueTailProse(block, text.slice(0, markerStart)),
+          ...this.openHeldTail(key, text.slice(markerStart)),
+        ];
+      }
+    }
     if (block.state === "streaming" && this.head === this.pending.length) {
       return [...boundaryEvents, { type: "text_delta", text }];
     }
@@ -318,10 +388,32 @@ export class CommandCodeToolTextFilter {
       block = { id: key, markupParts: [], probe: "", bytes: 0, state: "queued", ended: false, interrupted: true, candidates: new Set() };
       this.blocks.set(key, block);
     }
-    const preceding = this.makeRoom(encoder.encode(text).byteLength);
-    this.retain(block, text);
-    if (block.state === "probing" || block.state === "held") this.activeProbes.set(key, block);
+    const events = this.retainChunk(block, text);
+    return [...boundaryEvents, ...events, ...this.limitPending()];
+  }
+
+  /** Find a complete marker or its trailing prefix before either can reach presentation text. */
+  private findFreshMarker(text: string): number | undefined {
+    const index = text.indexOf(TOOL_CALL_MARKER);
+    if (index >= 0) return index;
+    for (let length = Math.min(text.length, TOOL_CALL_MARKER.length - 1); length > 0; length--) {
+      if (text.endsWith(TOOL_CALL_MARKER.slice(0, length))) return text.length - length;
+    }
+    return undefined;
+  }
+
+  /** Retain a text fragment on a block and append its pending chunk. Never drains. */
+  private retainChunk(block: TextBlock, text: string): AdapterEvent[] {
     const bytes = encoder.encode(text).byteLength;
+    const flushing = this.queuedBytes + bytes > MAX_HELD_TOOL_TEXT_BYTES;
+    const preceding = this.makeRoom(bytes);
+    // The new block has no pending chunk during the flush, so demote it here too.
+    if (flushing && (block.state === "held" || block.state === "probing")) {
+      block.state = "queued";
+      block.markupParts = [];
+      this.activeProbes.delete(block.id);
+    }
+    this.retain(block, text);
     const tail = this.pending.at(-1);
     if (tail?.kind === "chunk" && tail.block === block && this.head < this.pending.length) {
       tail.parts.push(text);
@@ -332,25 +424,32 @@ export class CommandCodeToolTextFilter {
       this.queueOperations++;
     }
     this.queuedBytes += bytes;
-    if (block.state === "probing") {
-      for (const char of text) {
-        if (!block.probe && char.trim() === "") continue;
-        block.probe += char;
-        if (!TOOL_CALL_MARKER.startsWith(block.probe)) {
-          block.state = "queued";
-          block.markupParts = [];
-          break;
-        }
-        if (block.probe === TOOL_CALL_MARKER) {
-          block.state = "held";
-          block.probe = "";
-          this.held.push(block);
-          break;
-        }
-      }
+    return preceding;
+  }
+
+  /**
+   * Emit or retain the prose that precedes a mid-prose marker. Streamed text takes the same
+   * immediate path it would have without a marker; anything queued stays on the wire order.
+   */
+  private enqueueTailProse(block: TextBlock, text: string): AdapterEvent[] {
+    if (text === "") return [];
+    if (block.state === "streaming" && this.head === this.pending.length) {
+      return [{ type: "text_delta", text }];
     }
-    if (block.state !== "probing" && block.state !== "held") this.activeProbes.delete(key);
-    return [...boundaryEvents, ...preceding, ...this.limitPending()];
+    return this.retainChunk(block, text);
+  }
+
+  /**
+   * Open a budgeted probing/held tail for markup or a marker prefix that followed prose. The tail shares the native-call matching of
+   * an ordinary held block — a same-content call drops it as an echo — but `interrupted` bars
+   * restoration forever: prose-prefixed markup can never mint a call, only disappear or be text.
+   */
+  private openHeldTail(key: string, text: string): AdapterEvent[] {
+    const tail: TextBlock = { id: key, markupParts: [], probe: "", bytes: 0, state: "probing", ended: false, interrupted: true, candidates: new Set(this.openInputs.keys()) };
+    this.blocks.set(key, tail);
+    this.probeBlockText(tail, text);
+    if (tail.state === "probing") this.activeProbes.set(key, tail);
+    return [...this.retainChunk(tail, text), ...this.limitPending()];
   }
 
   textEnd(id: unknown): AdapterEvent[] {
@@ -411,7 +510,8 @@ export class CommandCodeToolTextFilter {
         remaining.push(block);
         continue;
       }
-      const markup = parseToolCallMarkup(block.markupParts.join(""));
+      const text = block.markupParts.join("");
+      const markup = parseToolCallMarkup(text);
       if (markup && markup.name === name && markupMatchesInput(markup, input)) {
         this.drop(block);
         block.state = "dropped";
@@ -420,6 +520,18 @@ export class CommandCodeToolTextFilter {
       }
       block.candidates.delete(id);
       if (block.candidates.size === 0) {
+        // A malformed envelope cannot match a native input, but it is still an envelope: when the
+        // native call is for the function it declares, that call carries the execution, so drop the
+        // echo rather than releasing it as text. A native call for any other tool proves nothing
+        // about this envelope, so it keeps the release-as-text path below.
+        // A held tail (markup after prose) never drops on name alone — its context is ordinary
+        // prose the model wrote, so only an exact input match can prove it is an echo.
+        if (!block.interrupted && markup === undefined && looseEnvelopeName(text, this.declared) === name) {
+          this.drop(block);
+          block.state = "dropped";
+          this.activeProbes.delete(block.id);
+          continue;
+        }
         block.state = "queued";
         block.markupParts = [];
         this.activeProbes.delete(block.id);
@@ -472,6 +584,16 @@ export class CommandCodeToolTextFilter {
           events.push({ type: "tool_call_end" });
           salvaged = true;
           lastTextBlock = undefined;
+        } else if (restore && !block.interrupted && markup === undefined
+          && looseEnvelopeName(block.markupParts.join(""), this.declared) !== undefined) {
+          // A malformed envelope is still an envelope: the native duplicate (observed in every
+          // capture) carries the call, so the echo is dropped rather than rendered as text.
+          // Releasing it would put the raw markup back on screen; restoring it could execute a
+          // second time alongside the native call. The parser must have rejected the text, so an
+          // envelope that parses but does not fit its schema keeps the release-as-text contract.
+          this.drop(block);
+          block.state = "dropped";
+          lastTextBlock = undefined;
         } else {
           block.state = "queued";
           block.markupParts = [];
@@ -499,6 +621,26 @@ export class CommandCodeToolTextFilter {
     reservation.commitRetained();
     if (block.state === "probing" || block.state === "held") block.markupParts.push(text);
     block.bytes += bytes;
+  }
+
+  /** The incremental open-of-block probe: decide whether the block's text is tool-call markup. */
+  private probeBlockText(block: TextBlock, text: string): void {
+    if (block.state !== "probing") return;
+    for (const char of text) {
+      if (!block.probe && char.trim() === "") continue;
+      block.probe += char;
+      if (!TOOL_CALL_MARKER.startsWith(block.probe)) {
+        block.state = "queued";
+        block.markupParts = [];
+        break;
+      }
+      if (block.probe === TOOL_CALL_MARKER) {
+        block.state = "held";
+        block.probe = "";
+        this.held.push(block);
+        break;
+      }
+    }
   }
 
   private drop(block: TextBlock): void {
