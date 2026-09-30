@@ -52,6 +52,9 @@ import os, pathlib, subprocess, sys
 ocx, work, home, output = sys.argv[1:]
 env = os.environ.copy()
 env.update(HOME=home, OPENCODEX_HOME=str(pathlib.Path(home) / ".opencodex"))
+rtk = subprocess.run([ocx, "rtk", "--version"], cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15, check=True)
+if not rtk.stdout.decode("utf-8").strip().startswith("rtk "):
+    raise SystemExit("Packaged RTK did not report its version")
 try:
     with open(output, "wb") as stdout:
         subprocess.run(

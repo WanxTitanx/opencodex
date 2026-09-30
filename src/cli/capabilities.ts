@@ -676,6 +676,19 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["rtk"],
+    summary: "Run bundled RTK with unchanged arguments, stdio and exit status.",
+    routes: [],
+    flags: [],
+    mutates: true,
+    json: "none",
+    details: [
+      "RTK is included in the OpenCodex package; the command never downloads an executable or searches PATH.",
+      "The delegated command can mutate files or repositories. OpenCodex does not configure global agent hooks automatically.",
+      "Use ocx rtk --help for RTK's own flags and commands, or ocx rtk git status to filter Git output.",
+    ],
+  },
+  {
     command: ["headroom", "status"],
     summary: "Read the optional Headroom sidecar status and savings ledger.",
     routes: [{ method: "GET", path: "/api/headroom" }],

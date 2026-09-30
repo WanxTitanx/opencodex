@@ -23,7 +23,8 @@
     ],
     "resources": {
       "resources/gui/dist": "gui/dist",
-      "resources/keyring": "keyring"
+      "resources/keyring": "keyring",
+      "resources/rtk": "rtk"
     },
     "icon": [
       "icons/icon.icns",

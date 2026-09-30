@@ -479,3 +479,7 @@ Some providers — notably Anthropic (Claude) — may suspend or restrict accoun
 ## License
 
 MIT
+
+### Built-in RTK
+
+Run `ocx rtk git status`, `ocx rtk git diff`, or `ocx rtk --help` to use the RTK command-output filter included with OpenCodex. No separate RTK installation is required. See the [RTK guide](docs-site/src/content/docs/guides/rtk.md) for usage and packaging details.

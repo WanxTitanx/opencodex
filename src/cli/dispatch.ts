@@ -85,6 +85,10 @@ export function selectDefaultGuiUrl(
 }
 
 const commandRunners: Record<string, CommandRunner> = {
+  rtk: async deps => {
+    const { handleRtkCommand } = await import("./rtk");
+    return await handleRtkCommand(deps.args.slice(1));
+  },
   headroom: async deps => {
     const { handleHeadroomCommand } = await import("./headroom");
     return await handleHeadroomCommand(deps.args.slice(1));

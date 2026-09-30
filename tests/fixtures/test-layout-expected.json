@@ -1856,5 +1856,8 @@
   "cli-start-routing-heal-wiring.test.ts": "cli",
   "cli-status-codex-routing-drift.test.ts": "cli",
   "anthropic-family-route-integration.test.ts": "adapters/anthropic",
-  "cli-headroom.test.ts": "cli"
+  "cli-headroom.test.ts": "cli",
+  "cli-rtk.test.ts": "cli",
+  "rtk-bundle.test.ts": "cli",
+  "rtk-packaging.test.ts": "ci-workflows"
 }

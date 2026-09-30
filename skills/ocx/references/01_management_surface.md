@@ -962,6 +962,18 @@ JSON mode: `envelope`.
 - Anthropic requires --account <id>; inherit sends null to restore its pool default. Manual/affinity precedence and pool-off recovery are unchanged.
 - For a generic OAuth pool, `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability.
 
+### `ocx rtk`
+
+Run bundled RTK with unchanged arguments, stdio and exit status.
+
+Drives no management route.
+
+JSON mode: `none`.
+
+- RTK is included in the OpenCodex package; the command never downloads an executable or searches PATH.
+- The delegated command can mutate files or repositories. OpenCodex does not configure global agent hooks automatically.
+- Use ocx rtk --help for RTK's own flags and commands, or ocx rtk git status to filter Git output.
+
 ### `ocx headroom config`
 
 Read or explicitly change Headroom settings; no flags means read only.
@@ -1252,6 +1264,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 70
-- of those, state-changing: 38
+- declared capabilities: 71
+- of those, state-changing: 39
 - head-resolved invocations: 2

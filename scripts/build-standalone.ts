@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node
 import { join, resolve, basename } from "node:path";
 import { isStandaloneTarget, standaloneExecutableName } from "./standalone-targets";
 import { stageStandaloneKeyringAddon } from "./standalone-keyring";
+import { stageStandaloneRtk } from "./prepare-rtk";
 
 function hostTarget(): string {
   const platform = process.platform === "darwin" ? "darwin" : process.platform === "win32" ? "windows" : "linux";
@@ -29,6 +30,7 @@ if (!existsSync(join(guiDist, "index.html"))) {
 const output = resolve(argumentValue("--out") ?? join(repoRoot, "dist", "standalone", target));
 mkdirSync(output, { recursive: true });
 const executable = join(output, standaloneExecutableName(target));
+await stageStandaloneRtk(repoRoot, output, target);
 
 // Pre-bundle worker entrypoints so compiled binaries can spawn them from Blob
 // URLs: oven-sh/bun#29124 breaks nested worker entrypoints resolved from

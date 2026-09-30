@@ -178,6 +178,7 @@ jobs:
           set -euo pipefail
           binary="dist/standalone/${{ matrix.target }}/ocx"
           "$binary" --version
+          "$binary" rtk --version | grep -Eq '^rtk [0-9]+\.'
           OPENCODEX_HOME="$RUNNER_TEMP/ocx-home" "$binary" start --port 10177 >"$RUNNER_TEMP/ocx.log" 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true' EXIT
@@ -191,6 +192,9 @@ jobs:
         run: |
           $binary = "dist/standalone/${{ matrix.target }}/ocx.exe"
           & $binary --version
+          $rtkVersion = & $binary rtk --version
+          if ($LASTEXITCODE -ne 0 -or "$rtkVersion" -notmatch '^rtk \d+\.') { throw "Bundled RTK did not start" }
+          Write-Output $rtkVersion
           $env:OPENCODEX_HOME = Join-Path $env:RUNNER_TEMP "ocx-home"
           $process = Start-Process -FilePath $binary -ArgumentList "start", "--port", "10177" -PassThru
           try {
@@ -210,9 +214,9 @@ jobs:
           set -euo pipefail
           cd "dist/standalone/$STANDALONE_TARGET"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            powershell -NoProfile -Command 'Compress-Archive -Path ocx.exe,gui,keyring -DestinationPath ("../../ocx-{0}-{1}.zip" -f $env:RELEASE_VERSION,$env:STANDALONE_TARGET) -Force'
+            powershell -NoProfile -Command 'Compress-Archive -Path ocx.exe,gui,keyring,rtk -DestinationPath ("../../ocx-{0}-{1}.zip" -f $env:RELEASE_VERSION,$env:STANDALONE_TARGET) -Force'
           else
-            tar -czf "../../ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" ocx gui keyring
+            tar -czf "../../ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" ocx gui keyring rtk
           fi
           cd ../..
           # The pre-publication verifier resolves every recorded checksum from
@@ -418,7 +422,7 @@ jobs:
       # app unless each carries the Developer ID signature, the hardened runtime and a secure
       # timestamp (2.73.0-preview.20260930 was refused for exactly that). Sign them in place, after
       # the certificate import and before the bundler copies them.
-      - name: Sign the packaged keyring addons
+      - name: Sign packaged keyring and RTK binaries
         if: runner.os == 'macOS'
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -428,10 +432,16 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           addons=(desktop/src-tauri/resources/keyring/*.darwin-*.node)
+          rtk_tools=(desktop/src-tauri/resources/rtk/bun-darwin-*/rtk)
           if [ "${#addons[@]}" -eq 0 ]; then
             echo "::error::No macOS keyring addon was prepared for the bundle."
             exit 1
           fi
+          if [ "${#rtk_tools[@]}" -eq 0 ]; then
+            echo "::error::No macOS RTK executable was prepared for the bundle."
+            exit 1
+          fi
+          addons+=("${rtk_tools[@]}")
           if [ "${DESKTOP_SIGNING_CONFIGURED}" != "true" ]; then
             if [ "${DRY_RUN}" != "true" ]; then
               echo "::error::A real release must sign the packaged keyring addons."
@@ -492,6 +502,8 @@ jobs:
           app=desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/OpenCodex.app
           test -f "$app/Contents/Resources/keyring/keyring.darwin-arm64.node"
           test -f "$app/Contents/Resources/keyring/keyring.darwin-x64.node"
+          test -f "$app/Contents/Resources/rtk/bun-darwin-arm64/rtk"
+          test -f "$app/Contents/Resources/rtk/bun-darwin-x64/rtk"
           bash desktop/scripts/verify-macos-runtime.sh "$app"
 
       # Tauri patches a bundle-type marker into the application binary for each Linux format.

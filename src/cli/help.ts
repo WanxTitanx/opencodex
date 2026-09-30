@@ -79,6 +79,8 @@ Usage:
   ocx usage [--range <today|1d|7d|30d|all>] [--provider <name>] [--model <id>]
                               Token and estimated-cost report (alias of ocx observe usage)
   ocx storage <sub>           Storage report, cleanup, trash, and the cleanup policy
+  ocx headroom <sub>          Optional sidecar status, statistics, and configuration
+  ocx rtk <args...>           Bundled RTK command-output filtering
   ocx memory [--json]         Alias of ocx observe memory
   ocx api-key <sub>           Alias of ocx access key
   ocx access <sub>            External API keys and endpoint information

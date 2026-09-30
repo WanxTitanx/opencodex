@@ -584,6 +584,17 @@
       "documents": [
         "tests/"
       ]
+    },
+    {
+      "path": "ops/bundled-tools.md",
+      "tier": 6,
+      "title": "Bundled Command Tools",
+      "scope": "Pinned RTK executables, package assembly, resource lookup, and command forwarding.",
+      "documents": [
+        "src/rtk/",
+        "src/cli/",
+        "src/lib/"
+      ]
     }
   ],
   "contracts": {

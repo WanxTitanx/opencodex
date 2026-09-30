@@ -25,6 +25,8 @@ cmp "$original" "$sidecar"
 sha256sum "$original" "$sidecar"
 mkdir "$scratch/home"
 timeout 30s env OPENCODEX_HOME="$scratch/home" "$sidecar" --version
+test -x "$scratch/squashfs-root/usr/lib/OpenCodex/rtk/bun-linux-x64/rtk"
+timeout 15 env OPENCODEX_HOME="$scratch/home" "$sidecar" rtk --version | grep -Eq '^rtk [0-9]+\.'
 timeout 15s env HOME="$scratch/home" OPENCODEX_HOME="$scratch/home/opencodex" \
   "$sidecar" __keyring-load-check > "$scratch/keyring.json"
 python3 - "$scratch/keyring.json" <<'PY'

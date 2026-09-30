@@ -33,7 +33,10 @@
     "native/remote-workspace-helper/Cargo.toml",
     "native/remote-workspace-helper/Cargo.lock",
     "native/remote-workspace-helper/src",
-    "LICENSE"
+    "LICENSE",
+    "vendor/rtk/bin",
+    "vendor/rtk/LICENSE",
+    "vendor/rtk/NOTICE"
   ],
   "engines": {
     "node": ">=18"
@@ -75,7 +78,8 @@
     "doctor:gui": "cd gui && bun run doctor",
     "doctor:gui:full": "cd gui && bun run doctor:full",
     "doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts",
-    "setup:hooks": "bun scripts/setup-hooks.ts"
+    "setup:hooks": "bun scripts/setup-hooks.ts",
+    "prepare:rtk": "bun scripts/prepare-rtk.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.14.0",
@@ -86,6 +90,7 @@
   },
   "devDependencies": {
     "@types/bun": "1.4.0",
+    "fflate": "0.8.3",
     "typescript": "7.0.2"
   },
   "optionalDependencies": {

@@ -540,7 +540,7 @@ describe("widget extension signing", () => {
   test("the packaged keyring addons are Developer ID signed before the bundler copies them", () => {
     // Notarization refused 2.73.0-preview.20260930: Resources/keyring/*.node were ad-hoc or
     // unsigned and had no secure timestamp, and Tauri does not sign files under Resources.
-    const sign = steps.find(step => step.name === "Sign the packaged keyring addons");
+    const sign = steps.find(step => step.name === "Sign packaged keyring and RTK binaries");
     expect(sign?.if).toBe("runner.os == 'macOS'");
     expect(sign?.env?.MACOS_SIGN_IDENTITY).toContain("APPLE_SIGNING_IDENTITY");
     expect(sign?.run).toContain("desktop/src-tauri/resources/keyring/*.darwin-*.node");

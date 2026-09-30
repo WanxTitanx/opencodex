@@ -9,6 +9,12 @@ export interface CliCommandEntry {
 
 export const CLI_COMMANDS: CliCommandEntry[] = [
   {
+    name: "rtk",
+    usage: "ocx rtk <args...>",
+    summary: "Run the bundled RTK command-output filter; no separate RTK installation is needed.",
+    details: ["Arguments and stdio go directly to RTK. Examples: ocx rtk git status; ocx rtk --version."],
+  },
+  {
     name: "headroom",
     usage: "ocx headroom [status|stats|config] [--enabled <true|false>] [--base-url <url>] [--json]",
     summary: "Inspect or configure the optional Headroom sidecar.",

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { posix, win32 } from "node:path";
+import { packagedResourceCandidates } from "./packaged-resources";
 import { isStandaloneBinary, standaloneRoot } from "./standalone";
 
 export interface KeyringBinding {
@@ -13,8 +13,7 @@ export interface KeyringNativeAsset {
   filename: string;
 }
 
-/** Must match Tauri `productName`, which names Linux's usr/lib resource directory. */
-export const PACKAGED_DESKTOP_PRODUCT_NAME = "OpenCodex";
+export { PACKAGED_DESKTOP_PRODUCT_NAME } from "./packaged-resources";
 
 const ASSET_BY_TARGET: Readonly<Record<string, KeyringNativeAsset>> = {
   "bun-darwin-arm64": {
@@ -74,28 +73,7 @@ export function packagedKeyringCandidates({
   if (root === undefined) return [];
   const asset = runtimeAsset(platform, arch);
   if (!asset) return [];
-  // Paths follow the target platform's rules rather than the host's, so a candidate list is the
-  // same whether it is computed on that platform or simulated from another one.
-  const { basename, dirname, join, resolve } = platform === "win32" ? win32 : posix;
-  const executableDir = resolve(root);
-  const adjacent = join(executableDir, "keyring", asset.filename);
-  if (platform === "linux") {
-    const usrDir = dirname(executableDir);
-    // Tauri installs resources at usr/lib/<productName> while its sidecar is usr/bin/ocx.
-    // Restrict that fallback to the exact bundle shape; ordinary standalone archives keep the
-    // executable-owned adjacent directory as their only candidate.
-    return basename(executableDir) === "bin" && basename(usrDir) === "usr"
-      ? [adjacent, join(usrDir, "lib", PACKAGED_DESKTOP_PRODUCT_NAME, "keyring", asset.filename)]
-      : [adjacent];
-  }
-  if (platform !== "darwin") return [adjacent];
-  return [
-    // Prefer the executable-owned sibling. A standalone layout must not let an unrelated
-    // app-shaped ../Resources tree override the addon distributed with that executable.
-    adjacent,
-    // Tauri resources live in Contents/Resources while its external binary lives in Contents/MacOS.
-    join(executableDir, "..", "Resources", "keyring", asset.filename),
-  ];
+  return packagedResourceCandidates(root, ["keyring", asset.filename], platform);
 }
 
 const nodeRequire = createRequire(import.meta.url);
