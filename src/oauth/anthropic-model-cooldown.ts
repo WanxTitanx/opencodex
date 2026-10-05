@@ -1,10 +1,12 @@
 /** Model-family refusal and usage overlays carried from the Haly account pool. */
 import { getCachedProviderAccountQuota } from "../providers/quota";
+import { credentialGeneration, getAccountCredential } from "./store";
 
 type AnthropicModelFamily = "fable" | "opus" | "sonnet" | "haiku";
 interface AccountCooldown {
   cooldownUntil: number;
   cooldownSource: "retry-after" | "reset-derived" | "default";
+  credentialGeneration?: string;
 }
 export type ModelRateLimitHeaders = Pick<Headers, "get"> & Partial<Pick<Headers, "entries">>;
 type AnthropicRateLimitHeaders = ModelRateLimitHeaders;
@@ -49,6 +51,10 @@ function familyScopedCooldown(
 ): { family: AnthropicModelFamily; cooldown: AccountCooldown } | null {
   const family = anthropicModelFamily(modelId);
   if (!headers?.entries || !family) return null;
+  // Upstream owns the fixture-confirmed 7d_oi/Fable policy and its revalidation fence.
+  // This compatibility overlay only retains the explicitly named Haly family buckets.
+  if (headers.get("anthropic-ratelimit-unified-7d_oi-status")?.trim() === "rejected"
+    || headers.get("anthropic-ratelimit-unified-status")?.trim() === "rejected") return null;
   const unifiedRejected = (["5h", "7d"] as const).some(window => {
     const utilization = Number(headers.get(`anthropic-ratelimit-unified-${window}-utilization`));
     return headers.get(`anthropic-ratelimit-unified-${window}-status`)?.trim() === "rejected"
@@ -76,14 +82,10 @@ function familyScopedCooldown(
     buckets.set(bucket, current);
   }
 
-  const claim = headers.get("anthropic-ratelimit-unified-representative-claim")?.trim().toLowerCase() ?? "";
   const exhausted = [...buckets.entries()].filter(([bucket, value]) => {
     if (value.utilization === undefined || value.utilization < 0.99) return false;
     const bucketFamily = anthropicModelFamily(bucket);
-    return bucketFamily === family
-      || (bucket === "oi" && family === "fable")
-      || value.status === "rejected"
-      || (bucket === "oi" && claim.endsWith("_overage_included"));
+    return bucketFamily === family && value.status === "rejected";
   });
   if (exhausted.length === 0) return null;
 
@@ -134,8 +136,10 @@ export function recordModelFamilyCooldown(
 ): boolean {
   const scoped = familyScopedCooldown(headers, retryAfter, modelId, now);
   if (!scoped) return false;
+  const credential = getAccountCredential(PROVIDER, accountId);
+  if (!credential) return false;
   const families = health.get(accountId) ?? new Map<AnthropicModelFamily, AccountCooldown>();
-  families.set(scoped.family, scoped.cooldown);
+  families.set(scoped.family, { ...scoped.cooldown, credentialGeneration: credentialGeneration(credential) });
   health.set(accountId, families);
   return true;
 }
@@ -143,11 +147,15 @@ export function recordModelFamilyCooldown(
 export function modelFamilyCooldown(accountId: string, now: number, modelId?: string | null): AccountCooldown | null {
   const families = health.get(accountId);
   if (!families) return null;
-  for (const [family, cooldown] of families) if (cooldown.cooldownUntil <= now) families.delete(family);
+  const credential = getAccountCredential(PROVIDER, accountId);
+  const generation = credential && credentialGeneration(credential);
+  for (const [family, cooldown] of families) {
+    if (cooldown.cooldownUntil <= now || cooldown.credentialGeneration !== generation) families.delete(family);
+  }
   if (!families.size) health.delete(accountId);
   const family = anthropicModelFamily(modelId);
   const cooldown = family ? families.get(family) : undefined;
-  return cooldown ? { ...cooldown } : null;
+  return cooldown ? { cooldownUntil: cooldown.cooldownUntil, cooldownSource: cooldown.cooldownSource } : null;
 }
 
 export function clearModelFamilyCooldown(accountId: string): boolean { return health.delete(accountId); }

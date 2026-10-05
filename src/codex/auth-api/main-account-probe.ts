@@ -1,3 +1,4 @@
+import { parseCodexCredits, rememberCodexCredits } from "../credits";
 import { fetchCodexUsage } from "../quota-query-backoff";
 import type { CodexUsageOwner } from "../quota-query-backoff";
 import { loadConfig } from "../../config";
@@ -15,14 +16,15 @@ import { getMainAccountPlan, isMainAccountTokenVerifiablyLive, MAIN_CODEX_ACCOUN
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { captureMainAccountIdentityGeneration, clearMainAccountInfoCache, getMainAccountInfoCache, getMainQuotaCredentialGeneration, isMainAccountIdentityGenerationLive, isMainQuotaWriterLive, matchesMainQuotaCredential, observeMainQuotaCredential, setMainAccountCredentialPresence, setMainAccountInfoCache } from "../main-account-cache";
 import type { MainQuotaWriter, MainAccountInfo } from "../main-account-cache";
-import type { CodexQuotaRefreshOutcome } from "../quota-refresh-outcome";
+import { isCodexTerminalAuthCode } from "../quota-refresh-outcome";
+import type { CodexQuotaRefreshOutcome, CodexTerminalAuthCode } from "../quota-refresh-outcome";
 import { observeMainReserveRevocation } from "../reserve-availability";
 import type { AdmissionLease } from "../../lib/admission";
 import { nonEmptyPlan } from "./runtime-config";
 import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
 import { WHAM_REQUEST_TIMEOUT_MS } from "../quota-recovery-timing";
 import { withNativeMainCredentialClaim, isNativeMainClaimUnavailable } from "./http";
-import { MAIN_TERMINAL_AUTH_CODES, readMainAuthErrorCode, currentQuotaDispatchSequence, nextQuotaDispatchSequence, isQuotaDispatchCurrent, publishQuotaDispatch } from "./pool-quota-probe";
+import { readMainAuthErrorCode, currentQuotaDispatchSequence, nextQuotaDispatchSequence, isQuotaDispatchCurrent, publishQuotaDispatch } from "./pool-quota-probe";
 
 /**
  * Last reset-credit count this process parsed for the main account, tagged with the
@@ -78,14 +80,18 @@ function sharedMainQuotaPacingEnabled(config: OcxConfig): boolean {
  * itself would make a real 401 permanently transient.
  */
 export async function isTerminalMainAuthResponse(resp: Response, accessTokenLive: boolean): Promise<boolean> {
-  if (resp.status === 401) {
-    if (!accessTokenLive) return true;
-    const code = await readMainAuthErrorCode(resp);
-    return typeof code === "string" && MAIN_TERMINAL_AUTH_CODES.has(code);
-  }
-  if (resp.status !== 403) return false;
+  return (await classifyMainAuthResponse(resp, accessTokenLive)).terminal;
+}
+
+/** As `isTerminalMainAuthResponse`, also naming the provider code that made it terminal. */
+async function classifyMainAuthResponse(
+  resp: Response,
+  accessTokenLive: boolean,
+): Promise<{ terminal: boolean; code?: CodexTerminalAuthCode }> {
+  if (resp.status !== 401 && resp.status !== 403) return { terminal: false };
   const code = await readMainAuthErrorCode(resp);
-  return typeof code === "string" && MAIN_TERMINAL_AUTH_CODES.has(code);
+  if (isCodexTerminalAuthCode(code)) return { terminal: true, code };
+  return { terminal: resp.status === 401 && !accessTokenLive };
 }
 
 export interface MainResetQuotaProof {
@@ -102,6 +108,8 @@ export interface MainAccountInfoFetchResult {
   quotaRefresh?: CodexQuotaRefreshOutcome;
   /** Internal dispatch fence for diagnostics only; never copied into a public DTO or cache. */
   quotaRefreshGeneration?: number;
+  /** This current-credential usage response supplied terminal auth evidence; never public. */
+  terminalAuthFailure?: true;
   /** Whether this attempt safely inspected the physical native-main credential. */
   credentialChecked: boolean;
   /** Meaningful only when credentialChecked is true. */
@@ -287,7 +295,8 @@ export async function fetchMainAccountInfoWhileOwned(
       const resp = admission.response;
       quotaPhase = "publish";
       if (!resp.ok) {
-        const terminalAuthFailure = await isTerminalMainAuthResponse(resp, isMainAccountTokenVerifiablyLive());
+        const authFailure = await classifyMainAuthResponse(resp, isMainAccountTokenVerifiablyLive());
+        const terminalAuthFailure = authFailure.terminal;
         const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh, paced);
         if (retried) return retried;
         if (!isQuotaDispatchCurrent(dispatchSequence) || !credentialIsCurrent()) {
@@ -301,10 +310,15 @@ export async function fetchMainAccountInfoWhileOwned(
           if (diagnosticStillLive) quotaRefreshGeneration = captureMainAccountIdentityGeneration();
           markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID, writerGeneration);
         }
+        // Keep the last-known plan visible: after a plan change revokes the session, the plan the
+        // account HAD is what tells the operator why it stopped working.
         return {
-          info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true,
-          quotaRefresh: { status: "http_error", httpStatus: resp.status },
+          info: { ...EMPTY_MAIN_ACCOUNT_INFO, plan: nonEmptyPlan(cached?.plan) ?? nonEmptyPlan(getMainAccountPlan()) },
+          credentialChecked: true, hasCredential: true,
+          quotaRefresh: { status: "http_error", httpStatus: resp.status,
+            ...(authFailure.code ? { code: authFailure.code } : {}) },
           quotaRefreshGeneration,
+          ...(terminalAuthFailure ? { terminalAuthFailure: true as const } : {}),
         };
       }
       quotaPhase = "body";
@@ -351,6 +365,7 @@ export async function fetchMainAccountInfoWhileOwned(
       // Tag the count with the identity it was read from, so a later response that omits the
       // summary can restore the badge without ever crossing an account boundary.
       rememberMainResetCredits(requestAccountId, freshResetCredits);
+      if (requestAccountId !== null) rememberCodexCredits(MAIN_CODEX_ACCOUNT_ID, requestAccountId, parseCodexCredits(data.credits));
       setMainAccountInfoCache(result);
       // Only an explicit refresh may retract a reauth quarantine. A 200 from
       // /wham/usage proves the token authenticates to the usage endpoint; it does not

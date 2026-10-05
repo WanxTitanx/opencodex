@@ -8,6 +8,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { currentServingCommand, deferServiceChildToNewerRuntime, markDelegatedServiceReady, recordServingRuntime } from "../config/serving-runtimes";
 import { packageVersion } from "../lib/package-version";
+import { admitUpdateRestartChild } from "./update-restart-child";
+import { UpdateRestartRequired } from "./update-restart-candidate";
+import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
 import { findGuiDist } from "../server/gui-static";
 import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
 
@@ -85,9 +88,9 @@ import {
   runProxyRestart,
   runTrayProxyStart,
   type ProxyRestartLive,
-  type ProxyRestartResult,
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
+import { reportRestartFailure } from "./restart-failure";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
 import { SpendLedgerOwnerError } from "../lib/spend-ledger-owner";
@@ -127,7 +130,6 @@ import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxySti
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
-import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeShowStarPrompt } from "./star-prompt";
@@ -143,6 +145,7 @@ import { honorSiblingMarker, markSiblingStart, siblingOfLivePort, siblingRuntime
 import { consumeSiblingHandoff } from "../codex/sibling-handoff";
 import {
   reconcileClientStartupBeforeReady,
+  syncCodexBeforeCatalogObservation,
   syncClaudeAgentDefsAtProxyStartup,
 } from "./claude-agent-startup-sync";
 import {
@@ -201,6 +204,7 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
 initializeNodeLauncherContext();
 // The compiled executable is also the capture-only MCP server's launcher.
 // Handle this private entrypoint before CLI preflight or command dispatch.
@@ -372,6 +376,7 @@ async function findProxyOwnerBeforeJournalRecovery(
 }
 
 async function handleStart(options: { block?: boolean } = {}) {
+  updateRestartChild?.check();
   // A supervised service child defers to a foreign recorded owner before doing
   // anything else. 'ocx service start' refuses this activation path already, but
   // the process managers below it — the Windows boot wrapper's restart loop and
@@ -467,6 +472,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     },
   });
 
+  updateRestartChild?.check();
   const clientState = readClientConnectionState();
   if (clientState.kind === "invalid" || clientState.kind === "mismatched") {
     throw new Error(`client startup refused: ${clientState.reason}`);
@@ -551,7 +557,17 @@ async function handleStart(options: { block?: boolean } = {}) {
         let server: ReturnType<typeof serverModule.startServer>;
         for (let attempt = 0; ; attempt++) {
           try {
+            if (updateRestartChild && siblingStart) throw new Error("update_restart_sibling_refused");
+            updateRestartChild?.check(port, loadConfig().hostname ?? "");
             server = serverModule.startServer(port, { localAttestationSecret, readinessGate });
+            if (updateRestartChild) {
+              try { updateRestartChild.check(port, server.hostname); }
+              catch (error) {
+                try { await server.stop(true); }
+                catch (rollback) { throw new StartOwnershipRollbackUncertainError([error, rollback]); }
+                throw error;
+              }
+            }
             break;
           } catch (err) {
             try { await serverModule.waitForFailedStartRollback(err); }
@@ -579,14 +595,14 @@ async function handleStart(options: { block?: boolean } = {}) {
         }
         return { server, serverModule, port, readinessGate, localAttestationSecret, config };
       },
-      writePid: () => writePid(process.pid),
-      writeRuntime: bound => writeRuntimePort({
+      writePid: () => { updateRestartChild?.check(); writePid(process.pid); },
+      writeRuntime: bound => { updateRestartChild?.check(bound.port, bound.config.hostname ?? ""); writeRuntimePort({
         pid: process.pid,
         port: bound.port,
         hostname: bound.config.hostname,
         attestationSecret: bound.localAttestationSecret,
         ...siblingRuntimeField(),
-      }),
+      }); updateRestartChild?.complete(); },
       stopBound: bound => bound.server.stop(true),
       removeRuntime: () => removeRuntimePortIfPidIs(process.pid),
       removePid: () => removePidIfValueIs(process.pid),
@@ -616,12 +632,14 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Loopback-only (legacy mode still forward-tags) and respects syncResumeHistory opt-out.
   let historyGuardian: ReturnType<typeof startHistoryMigrationGuardian> | undefined;
   let routingHealer: { stop(): void } | undefined; // routing-healer.ts; stopped first in syncCleanup
+  let catalogHealer: { stop(): void } | undefined;
 
   let cleaned = false;
   let cleanupSucceeded = true;
   const syncCleanup = () => {
     if (cleaned) return cleanupSucceeded;
     cleaned = true;
+    try { catalogHealer?.stop(); } catch { /* best-effort */ }
     try { routingHealer?.stop(); } catch { /* best-effort */ }
     try { guardian.stop(); } catch { /* best-effort */ }
     try { historyGuardian?.stop(); } catch { /* best-effort */ }
@@ -704,34 +722,21 @@ async function handleStart(options: { block?: boolean } = {}) {
   // deferred until the best-effort Claude roster and Desktop registry settle. This
   // keeps /readyz closed across startup initialization without making an optional
   // Claude integration failure prevent the proxy from starting.
+  const catalogHealerModule = siblingStart ? null : await import("../codex/catalog-self-heal");
   const startupSync = await reconcileClientStartupBeforeReady(
     readinessGate,
-    gate => syncCodexOnStartIfEnabled(port, config, undefined, gate),
+    gate => syncCodexBeforeCatalogObservation(gate,
+      forwarding => syncCodexOnStartIfEnabled(port, config, undefined, forwarding),
+      () => {
+        if (catalogHealerModule && !siblingStart && !cleaned) catalogHealer = catalogHealerModule.startCodexCatalogSelfHeal({ port });
+      }),
     () => systemEnv.injected
       ? Promise.resolve(null)
       : syncClaudeAgentDefsAtProxyStartup(config, port),
     async () => {
-      try {
-        const { fetchAllModels } = await import("../server/management-api");
-        const { desktopVisibleNativeSlugs } = await import("../codex/catalog");
-        const { resolveAdmittedCodexModelEntitlements } = await import("../codex/model-entitlement-admission");
-        const { buildDesktopDiscoveryInputs } = await import("../claude/desktop-discovery-inputs");
-        const [models, modelEntitlements] = await Promise.all([
-          fetchAllModels(config),
-          resolveAdmittedCodexModelEntitlements(config, { clientVersion: null }),
-        ]);
-        const inputs = buildDesktopDiscoveryInputs({
-          config, models, modelEntitlements,
-          desktopNativeCandidates: desktopVisibleNativeSlugs(config),
-        });
-        buildDesktop3pRegistry(
-          inputs.nativeSlugs, inputs.routedModels,
-          config.claudeCode?.desktopProfile, inputs.nativeContextCap,
-        );
-      } catch {
-        // Best-effort; model discovery can rebuild it. Never reflect credential or provider errors.
-        console.warn("[opencodex] Claude Desktop model registry could not be initialized at startup.");
-      }
+      // Shared with the Claude Code CLI picker, which awaits this same build (desktop-3p-startup.ts).
+      const { initDesktop3pRegistry } = await import("../claude/desktop-3p-startup");
+      await initDesktop3pRegistry(config);
     },
   );
   if (!startupSync.ran) console.log(startupLeftCodexNativeLine(localClientSkipReason(config), server.port ?? port));
@@ -914,28 +919,6 @@ const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIM
 
 /** Reserve confirmation time within the shared restart deadline. */
 const RESTART_REOBSERVE_RESERVE_MS = 10_000;
-function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>): void {
-  if (result.phase === "identity") {
-    console.error("❌ Refusing to restart because the running proxy identity could not be attested.");
-  } else if (result.phase === "request") {
-    const code = result.error instanceof Error ? result.error.message : "";
-    if (code === "restart_capability_unsupported") {
-      console.error("❌ The running proxy predates process-bound restart support; no unsafe fallback was attempted.");
-      console.error("   After confirming this home owns the proxy, run `ocx stop` and then `ocx start` once.");
-    } else if (code === "restart_version_skew") {
-      console.error("❌ The running proxy reports a different OpenCodex version than this CLI; restarting in place would respawn the old installation.");
-      console.error("   Run `ocx stop` and then `ocx start` from this installation instead.");
-    } else if (code === "restart_package_tree_unsettled") {
-      console.error("❌ The proxy's package files are still being replaced; wait for the install to finish, then run `ocx restart` again.");
-    } else {
-      console.error("❌ Proxy restart request could not be confirmed; no fallback stop/start was attempted.");
-    }
-  } else if (result.phase === "replacement") {
-    console.error("❌ Proxy restart was accepted, but no identity-verified replacement became healthy in time.");
-  } else {
-    console.error("❌ Proxy was not running and the fallback start did not become healthy.");
-  }
-}
 async function handleProxyRestart(
   startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
 ): Promise<boolean> {
@@ -958,6 +941,15 @@ async function handleProxyRestart(
       findLive: () => findLiveProxy({ deadlineAt: end, attempts: 2, acceptPackageTreeFenced: true }), expired: () => Date.now() >= end,
     })),
   });
+  if (!result.ok && result.phase === "request" && result.error instanceof UpdateRestartRequired) {
+    const candidate = result.error.candidate();
+    console.log(`🔄 Running proxy ${candidate.target.version} is older than this CLI (${candidate.cliVersion}); restarting it from the current installation...`);
+    const update = await restartFromCurrentInstallation(candidate, deadlineAt, detachedStartEnvironment());
+    if (update.ok) console.log(`✅ Proxy updated to ${update.live.version} (PID ${update.live.pid}).`);
+    else console.error(`❌ ${describeUpdateRestartFailure(update.code, update.reason)} (${update.code})`);
+    process.exitCode = update.ok ? 0 : 1;
+    return update.ok;
+  }
   if (!result.ok) reportRestartFailure(result);
   process.exitCode = result.ok ? 0 : 1;
   return result.ok;
@@ -1212,7 +1204,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
 
   if (snapshot) {
     if (guardedStep?.effect === "approval-changed") {
-      return approvalChanged();
+      return approvalChanged(guardedStep.detail);
     }
     if (guardedStep?.effect === "manager-still-active") {
       return managerStillActive(record.service, record);
@@ -1705,7 +1697,7 @@ async function handleStatus() {
     process.exit(1);
   }
 
-  const status = await collectStatus();
+  const status = await collectStatus({ mainAccountPolicy: wantsJson });
   if (wantsJson) {
     console.log(JSON.stringify(status.json, null, 2));
     return;

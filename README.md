@@ -1,4 +1,6 @@
 <p align="center">
+
+
   <img src="assets/banner.png" alt="opencodex — universal provider proxy for Codex, Claude Code, Claude Desktop and Grok Build" width="100%">
 </p>
 
@@ -12,6 +14,8 @@ Two commands, and every one of them runs any LLM you point it at.</p>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node version">
 </p>
+
+> Haly integration candidate: stable upstream `v2.78.0` plus Haly extensions and bundled RTK `0.50.0`. The package uses the upstream development version line `2.79.0`; it is not an official 2.79.0 release. API keys are under Connect; Headroom is under Usage & Logs.
 
 ```bash
 npm install -g @bitkyc08/opencodex
@@ -363,12 +367,17 @@ network failures, or invalid decisions fail open to the first currently eligible
 cancellation still cancels the request. Automated tests use a mocked TypeSafe endpoint and do not
 validate a live JEV account.
 
+A JEV Combo can instead ask a self-hosted decision model, such as Ollama's keyless `tev1`: add a
+`jev-decision` provider whose `baseUrl` is the full `/v1/systemone` endpoint and set the Combo's
+`decisionProvider` to it. TypeSafe credentials are never sent there. Details:
+[System One-compatible server](https://opencodex.me/guides/combos/#system-one-compatible-server).
+
 ## Providers & adapters
 
 <!-- sponsors:main-first-mention -->
 OpenAI (ChatGPT login or API key), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (local + Cloud), Cursor (experimental), and every OpenAI-compatible endpoint — plus DeepSeek,
-Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
+Groq, OpenRouter, OpenGateway, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
 Qwen Cloud, Qoder Global and CN (official PAT + CLI), SiliconFlow, and more. Full list: `ocx init` or the
 [provider docs](https://opencodex.me/guides/providers/).
 

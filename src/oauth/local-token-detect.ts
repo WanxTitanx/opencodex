@@ -271,3 +271,10 @@ export function detectLocalClaudeIdentity(): { deviceId: string; accountUuid: st
   }
   return null;
 }
+
+/** Shared-token continuity for opaque Claude tokens; fully rotated pairs need authenticated account proof. */
+export function hasClaudeCredentialContinuity(stored: OAuthCredentials, disk: OAuthCredentials): boolean {
+  const sameToken = (left: string, right: string): boolean =>
+    typeof left === "string" && left.trim().length > 0 && left === right;
+  return sameToken(stored.refresh, disk.refresh) || sameToken(stored.access, disk.access);
+}

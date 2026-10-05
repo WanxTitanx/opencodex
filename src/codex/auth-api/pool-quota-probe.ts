@@ -1,3 +1,4 @@
+import { parseCodexCredits, rememberCodexCredits } from "../credits";
 import { fetchCodexUsage } from "../quota-query-backoff";
 import type { CodexUsageOwner } from "../quota-query-backoff";
 import { capturePoolQuotaWriter, getValidCodexToken, isCodexAccountGenerationLive, forceRefreshCodexPoolToken, markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, isTerminalCodexPoolRefreshFailure, CodexCredentialGenerationConflictError, CodexCredentialRefreshLockTimeoutError, CodexCredentialRefreshBusyError, CodexCredentialRefreshStaleError, TokenRefreshError } from "../account-store";
@@ -14,14 +15,12 @@ import { WHAM_REQUEST_TIMEOUT_MS } from "../quota-recovery-timing";
 import { claimQuotaRecovery, fencePropagatedQuotaRecovery, quotaRecoveryTerminalFor, releaseQuotaRecovery, settleQuotaRecovery, settleQuotaRecoveryTerminal } from "../quota-401-recovery";
 import { seedLoginRowsForTests } from "./login-state";
 import { nonEmptyPlan } from "./runtime-config";
+import { CODEX_TERMINAL_AUTH_CODES } from "../quota-refresh-outcome";
 
 export const POOL_CACHE_TTL = 5 * 60_000;
 export const POOL_QUOTA_REFRESH_CONCURRENCY = 4;
 
-export const MAIN_TERMINAL_AUTH_CODES = new Set([
-  "invalid_workspace_selected",
-  "invalid_refresh_token",
-]);
+export const MAIN_TERMINAL_AUTH_CODES: ReadonlySet<string> = new Set(CODEX_TERMINAL_AUTH_CODES);
 
 export async function readMainAuthErrorCode(resp: Response): Promise<unknown> {
   try {
@@ -353,6 +352,9 @@ export async function commitPoolQuotaResponse(
   if (ctx.mayPublish?.() === false) {
     return { quota: getAccountQuota(accountId), needsReauth: false, credentialGeneration: generation };
   }
+  if (ctx.poolWriter && isCodexAccountGenerationLive(accountId, generation)) {
+    rememberCodexCredits(accountId, ctx.poolWriter.historyIdentity, parseCodexCredits(data.credits));
+  }
   const freshPlan = nonEmptyPlan(data.plan_type) ?? undefined;
   const quota = parseUsageQuota({ ...data, plan_type: freshPlan ?? configuredPlan });
   const freshResetCredits = quota?.resetCredits;
@@ -369,7 +371,8 @@ export async function commitPoolQuotaResponse(
   }
   const validPolicyObservation = isValidWhamHistoryObservation(data);
   setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, validPolicyObservation ? quota : null,
-    ctx.poolWriter && validPolicyObservation ? { writer: ctx.poolWriter, observedAt, source: "wham", raw: quota } : undefined);
+    ctx.poolWriter && validPolicyObservation ? { writer: ctx.poolWriter, observedAt, source: "wham", raw: quota } : undefined,
+    true);
   return {
     quota: getAccountQuota(accountId),
     needsReauth: false,

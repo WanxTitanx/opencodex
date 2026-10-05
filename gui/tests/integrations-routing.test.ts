@@ -23,7 +23,6 @@ import { normalizeHashPath, replaceHash } from "../src/hash-routing";
  */
 
 const LEGACY_DESTINATIONS: readonly (readonly [string, string])[] = [
-  ["claude", "integrations/claude"],
   ["grok", "integrations/grok"],
 ];
 
@@ -84,7 +83,7 @@ describe("legacy integration hashes", () => {
 
 describe("registered nested hashes", () => {
   test("every registered tab hash survives untouched", () => {
-    for (const raw of INTEGRATION_TAB_HASHES) {
+    for (const raw of INTEGRATION_TAB_HASHES.filter(hash => !hash.startsWith("integrations/claude"))) {
       expect(readPageFromHash(raw)).toBe("integrations");
       expect(hashBelongsToPage(raw, "integrations")).toBe(true);
       const action = resolveAppHashChange(raw);
@@ -101,7 +100,7 @@ describe("registered nested hashes", () => {
      * read it — the panel would open on Claude Code every time.
      */
     expect(INTEGRATION_TAB_HASHES).toContain("integrations/claude/desktop");
-    expect(resolveAppHashChange("integrations/claude/desktop").replaceTo).toBeNull();
+    expect(resolveAppHashChange("integrations/claude/desktop")).toEqual({ page: "claude", replaceTo: "claude/desktop" });
   });
 
   test("the DSH deep link is registered and survives normalization", () => {
@@ -149,11 +148,13 @@ describe("two-plane integration call routing", () => {
     // API keys moved to its own page — it must no longer render inside Integrations.
     expect(app).toContain("<ApiKeysPage apiBase={sharedBase}");
     expect(integrations).not.toContain("ApiKeys");
-    for (const component of ["Grok", "Claude", "IntegrationsOverview", "FileIntegrationPage"]) {
+    for (const component of ["Grok", "IntegrationsOverview", "FileIntegrationPage"]) {
       expect(integrations).toContain(`${component}`);
     }
     expect(integrations).toContain("<Grok apiBase={apiBase}");
-    expect(integrations).toContain("<Claude apiBase={apiBase}");
+    // Claude is a Connect tab now; it gets Integrations' apiBase, which App sets to sharedBase.
+    expect(integrations).toContain("<Claude apiBase={apiBase} active={active} embedded />");
+    expect(app).toContain('{shellPage === "integrations" && <Integrations apiBase={sharedBase}');
     expect(integrations).toContain("<IntegrationsOverview apiBase={apiBase}");
     expect(integrations).toContain("`${machineApiBase}/api/machine/clients`");
     expect(integrations).toContain("`${machineApiBase}/api/machine/sync`");

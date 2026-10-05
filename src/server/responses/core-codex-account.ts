@@ -60,7 +60,7 @@ import {
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 import { isRequestExecutionBudget } from "../../lib/request-execution-budget";
 import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
-import { hasForwardableCodexBearer } from "../auth-cors";
+import { codexRouteCredentialOwnership, type CodexCredentialOwnershipOptions } from "./core-auth";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   conversationStateBindingFromAuth,
@@ -128,7 +128,8 @@ export function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxPro
   const mainWriter = authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined;
   return headers => {
     if (credentialGeneration !== undefined && !isCodexAccountGenerationLive(accountId, credentialGeneration)) return;
-    applyCapturedCodexQuota(accountId, headers, writerGeneration, mainWriter, { modelId, poolWriter: authCtx.kind === "pool" ? authCtx.poolQuotaWriter : undefined });
+    applyCapturedCodexQuota(accountId, headers, writerGeneration, mainWriter, { modelId, poolWriter: authCtx.kind === "pool" ? authCtx.poolQuotaWriter : undefined,
+      poolResponse: authCtx.kind === "pool" });
   };
 }
 
@@ -360,7 +361,7 @@ export interface CodexPoolAccountRetryArgs {
   route: Pick<RouteResult, "providerName" | "modelId" | "provider" | "staticPolicy">;
   parsed: OcxParsedRequest;
   logCtx: RequestLogContext;
-  options: {
+  options: CodexCredentialOwnershipOptions & {
     admission?: DataPlaneAdmission;
     codexAuthPolicy?: CodexAuthPolicyConfig;
     visionDescribeTerminal?: boolean;
@@ -641,10 +642,13 @@ export async function retryCodexPoolOnAlternateAccount(
         "pool",
         {
           excludeAccountId: firstAuthCtx.accountId,
+          signal: options.abortSignal,
           admission: options.admission,
           codexAuthPolicy: options.codexAuthPolicy,
           modelId: route.modelId,
-          requestScopedMainCredential: hasForwardableCodexBearer(callerAuthHeaders, config),
+          requestScopedMainCredential: codexRouteCredentialOwnership(callerAuthHeaders, config, {
+            provider: route.provider, codexAccountMode: "pool",
+          }, options).requestScopedMainCredential,
           beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
           resolveCodexModelEntitlements: entitlementResolver,
         },
@@ -718,7 +722,8 @@ export async function retryCodexPoolOnAlternateAccount(
       firstResponse.headers,
       firstAuthCtx.writerGeneration,
       firstAuthCtx.kind === "main-pool" ? firstAuthCtx.mainQuotaWriter : undefined,
-      { modelId: route.modelId, poolWriter: firstAuthCtx.kind === "pool" ? firstAuthCtx.poolQuotaWriter : undefined },
+      { modelId: route.modelId, poolWriter: firstAuthCtx.kind === "pool" ? firstAuthCtx.poolQuotaWriter : undefined,
+        poolResponse: firstAuthCtx.kind === "pool" },
     );
   }
   const deferFirstOutcome = shouldDeferCodexResetDerivedCooldown(

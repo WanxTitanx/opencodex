@@ -199,6 +199,15 @@
       ]
     },
     {
+      "path": "transports/policy-fallback.md",
+      "tier": 3,
+      "title": "Policy Candidate Fallback",
+      "scope": "Original policy authorization, concrete candidate retries and physical destination deduplication.",
+      "documents": [
+        "src/server/"
+      ]
+    },
+    {
       "path": "transports/responses-spend.md",
       "tier": 3,
       "title": "Responses Spend Reservations",
@@ -235,7 +244,7 @@
       "path": "data-planes/images.md",
       "tier": 3,
       "title": "Images Data Plane",
-      "scope": "Standalone image generation and edit relay.",
+      "scope": "Standalone image generation/edit relay and local hosted Responses image display.",
       "documents": [
         "src/server/"
       ]
@@ -291,6 +300,17 @@
         "src/server/",
         "src/types/",
         "src/web-search/"
+      ]
+    },
+    {
+      "path": "providers/jev-decision.md",
+      "tier": 4,
+      "title": "JEV Decision Routing",
+      "scope": "JEV Combo decision methods (TypeSafe, self-hosted System One rows, opencodex models), the decision request path, dashboard surfaces, and the content-free statistics projection.",
+      "documents": [
+        "src/combos/",
+        "src/server/",
+        "src/usage/"
       ]
     },
     {
@@ -412,6 +432,17 @@
       ]
     },
     {
+      "path": "cli-management.md",
+      "tier": 5,
+      "title": "CLI management and discovery",
+      "scope": "Terminal help and capability metadata, management-client output and the generated operating reference.",
+      "documents": [
+        "src/cli/",
+        "scripts/generate-ocx-skill-surface.ts",
+        "skills/ocx/"
+      ]
+    },
+    {
       "path": "gui-and-management-api.md",
       "tier": 5,
       "title": "GUI And Management API",
@@ -425,6 +456,18 @@
         "src/usage/",
         "src/usage/timeline.ts",
         "src/vision/"
+      ]
+    },
+    {
+      "path": "management-extensions.md",
+      "tier": 5,
+      "title": "Management Extensions",
+      "scope": "Haly API-key quotas and model scopes, optional Headroom, grouped dashboard navigation.",
+      "documents": [
+        "gui/",
+        "src/headroom/",
+        "src/cli/",
+        "src/server/"
       ]
     },
     {
@@ -451,6 +494,17 @@
         "src/clients/",
         "src/integrations/",
         "src/lib/"
+      ]
+    },
+    {
+      "path": "clients/chatgpt-desktop.md",
+      "tier": 5,
+      "title": "ChatGPT Desktop",
+      "scope": "Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries.",
+      "documents": [
+        "src/chatgpt/",
+        "src/cli/",
+        "src/codex/"
       ]
     },
     {

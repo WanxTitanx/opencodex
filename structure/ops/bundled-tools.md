@@ -24,7 +24,7 @@ Linux usr/lib/OpenCodex. Resolution never searches PATH or cwd and never downloa
 A missing, linked, or non-executable entry fails with an installation error.
 
 `src/cli/root.ts` leaves RTK's arguments intact and bypasses Codex-shim preflight for this
-command. `src/cli/rtk.ts` forwards an argument vector, inherited stdio, child exit status,
+command. `src/cli/capabilities-bundled-tools.ts` declares RTK and Headroom in the modular CLI discovery facade. `src/cli/rtk.ts` forwards an argument vector, inherited stdio, child exit status,
 and interruption signals. It does not create proxy configuration or initialize global
 agent hooks. RTK itself owns the behavior and state of the explicitly delegated command.
 
