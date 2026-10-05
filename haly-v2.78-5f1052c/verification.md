@@ -22,7 +22,7 @@ Automated unit/integration test suites, Windows/macOS execution, live provider i
 
 ## Screenshots
 
-These show the built candidate in an isolated local fixture with synthetic providers, a synthetic key and external HTTP requests blocked. The Portuguese Headroom page and API-key quota/model-scope details rendered without browser error/warning entries during capture. No real credentials, active user configuration, provider inference or production service were used for the screenshots. The images establish UI rendering only.
+These show the built candidate in an isolated local fixture with synthetic providers and a synthetic key. The Portuguese Headroom page and API-key quota/model-scope details rendered without browser error/warning entries during capture. No real credentials, active user configuration, provider inference or production service were used for the screenshots. The images establish UI rendering only. The fixture logged an Anthropic model-discovery HTTP 401; this is not evidence of successful provider discovery or inference.
 
 ![Headroom with grouped navigation](headroom-preview.jpg)
 
