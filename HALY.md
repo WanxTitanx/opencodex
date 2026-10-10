@@ -41,6 +41,9 @@ que esperam outro comportamento foram ajustados com comentários `Haly (dario pa
 3. `bun x tsc --noEmit`, `cd gui && bun x tsc -b && bun run lint`, e os testes das áreas tocadas (`bun run test <arquivos>`; a suíte completa passa de 900 s em máquinas pequenas).
 4. Empacotar: `bun install`, `bun run build:gui`, `npm pack` (o `prepack` baixa e verifica o RTK).
 5. Instalar em `~/.local/opt/opencodex-haly/<versão>-<commit>/`: copiar o `.tgz`, `package.json` com `"@bitkyc08/opencodex": "file:<tgz>"`, `npm install --omit=dev`, criar `node_modules/@bitkyc08/opencodex/.haly-local-build`.
-6. Apontar `~/.local/lib/node_modules/@bitkyc08/opencodex` para `node_modules/@bitkyc08/opencodex` da nova pasta e rodar `ocx restart`.
+6. Apontar `~/.local/lib/node_modules/@bitkyc08/opencodex` para `node_modules/@bitkyc08/opencodex` da nova pasta e rodar
+   `ocx service restart`. O proxy roda pelo serviço systemd `opencodex-proxy`: o `ocx restart` de um CLI mais novo não troca
+   a versão de um proxy supervisionado (falha com `update_restart_eligibility_failed`), e o `ocx service restart` regrava a
+   unit a partir da instalação atual antes de reiniciar.
 
-Rollback: apontar o link de volta para a pasta anterior em `~/.local/opt/opencodex-haly/` e `ocx restart`.
+Rollback: apontar o link de volta para a pasta anterior em `~/.local/opt/opencodex-haly/` e `ocx service restart`.
