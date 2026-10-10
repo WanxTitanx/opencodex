@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { CHATGPT_FETCH_TIMEOUT_MS, ChatGPTOAuthFlow, ChatGptTokenError, ChatGptTokenRequestError, refreshChatGPTToken } from "../../src/oauth/chatgpt";
+import {
+  CHATGPT_FETCH_TIMEOUT_MS, CHATGPT_REFRESH_ORIGINATOR, CHATGPT_REFRESH_SCOPE, CHATGPT_REFRESH_USER_AGENT,
+  ChatGPTOAuthFlow, ChatGptTokenError, ChatGptTokenRequestError, refreshChatGPTToken,
+} from "../../src/oauth/chatgpt";
 
 const originalFetch = globalThis.fetch;
 const originalSetTimeout = globalThis.setTimeout;
@@ -178,10 +181,16 @@ describe("ChatGPT token fetch cancellation and deadlines", () => {
     globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
       expect(String(url)).toBe("https://auth.openai.com/oauth/token");
       expect(init?.method).toBe("POST");
-      expect(init?.headers).toEqual({ "Content-Type": "application/x-www-form-urlencoded" });
+      // Haly: refresh carries the Codex CLI credential-surface identity (UA, originator, scope).
+      expect(init?.headers).toEqual({
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": CHATGPT_REFRESH_USER_AGENT,
+        "originator": CHATGPT_REFRESH_ORIGINATOR,
+      });
       const body = new URLSearchParams(String(init?.body));
       expect(body.get("grant_type")).toBe("refresh_token");
       expect(body.get("refresh_token")).toBe("synthetic-refresh");
+      expect(body.get("scope")).toBe(CHATGPT_REFRESH_SCOPE);
       observed.push(init!.signal!);
       return Response.json({ access_token: "at", refresh_token: "rt", expires_in: 3600 });
     }) as typeof fetch;

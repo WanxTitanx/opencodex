@@ -109,11 +109,15 @@ describe("observed Claude Code identity", () => {
     expect(built.get("x-claude-code-session-id")).toBe(SESSION);
     expect(built.get("x-stainless-runtime-version")).toBe("22.1.0");
   });
-  test("generated Responses adapter traffic keeps its existing compatibility fingerprint", async () => {
+  test("generated Responses adapter traffic signs as Claude Code on the subscription path", async () => {
+    // Haly (dario parity): OAuth traffic the adapter generates carries the Claude Code CLI
+    // identity, not the SDK compatibility fingerprint upstream uses.
     const parsed = { modelId: "m", stream: false, options: {}, context: { messages: [{ role: "user", content: "fixture" }], systemPrompt: [] } } as unknown as OcxParsedRequest;
-    const built = await createAnthropicAdapter(provider).buildRequest(parsed);
-    expect(built.headers["User-Agent"]).toBe("@anthropic-ai/sdk/0.74.0");
-    expect(built.headers["X-Claude-Code-Session-Id"]).toBe(claudeCodeSessionId(provider.apiKey));
+    const built = new Headers((await createAnthropicAdapter(provider).buildRequest(parsed)).headers);
+    expect(built.get("user-agent")).toStartWith("claude-cli/");
+    expect(built.get("x-app")).toBe("cli");
+    expect(built.get("x-claude-code-session-id")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(built.get("authorization")).toBe(`Bearer ${provider.apiKey}`);
   });
 });
 

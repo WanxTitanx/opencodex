@@ -12,7 +12,7 @@ export const CAPABILITY_DATA_FILES = [
   "capabilities-observe-system.ts",
   "capabilities-access-remote.ts",
   "capabilities-lab.ts",
-
+  "capabilities-bundled-tools.ts",
 ] as const;
 
 type Edge = { target: string; kind: "import" | "export"; typeOnly: boolean };
@@ -27,7 +27,7 @@ const ROLES: Readonly<Record<string, readonly string[]>> = {
     "import:value:capabilities-observe-system.ts",
     "import:value:capabilities-access-remote.ts",
     "import:value:capabilities-lab.ts",
-
+    "import:value:capabilities-bundled-tools.ts",
   ],
   "capabilities-base.ts": ["import:type:capability-types.ts"],
   "capability-types.ts": [],
@@ -38,7 +38,7 @@ const ROLES: Readonly<Record<string, readonly string[]>> = {
   "capabilities-observe-system.ts": ["import:type:capability-types.ts"],
   "capabilities-access-remote.ts": ["import:type:capability-types.ts"],
   "capabilities-lab.ts": ["import:type:capability-types.ts"],
-
+  "capabilities-bundled-tools.ts": ["import:type:capability-types.ts"],
 };
 
 function closingBrace(tokens: readonly Token[], start: number): number {

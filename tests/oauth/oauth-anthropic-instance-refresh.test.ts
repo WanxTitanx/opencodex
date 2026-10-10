@@ -227,7 +227,7 @@ for (const instance of ["anthropic", "anthropic2"] as const) {
         account: { uuid: `synthetic-${instance}-uuid` } });
     }) as typeof fetch;
     const result = await OAUTH_PROVIDERS[instance]!.refresh(`synthetic-${instance}-supplied-refresh`);
-    expect(sends).toEqual([{ url: "https://api.anthropic.com/v1/oauth/token", token: `synthetic-${instance}-supplied-refresh` }]);
+    expect(sends).toEqual([{ url: "https://platform.claude.com/v1/oauth/token", token: `synthetic-${instance}-supplied-refresh` }]);
     expect(result.access).toBe(`synthetic-${instance}-exchanged-access`);
     expect(result.refresh).toBe(`synthetic-${instance}-exchanged-refresh`);
     expect(result.accountId).toBe(`synthetic-${instance}-uuid`);

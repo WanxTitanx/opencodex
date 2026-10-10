@@ -12,6 +12,7 @@ import { INTEGRATION_CAPABILITIES } from "../../src/cli/capabilities-integration
 import { OBSERVE_SYSTEM_CAPABILITIES } from "../../src/cli/capabilities-observe-system";
 import { ACCESS_REMOTE_CAPABILITIES } from "../../src/cli/capabilities-access-remote";
 import { LAB_CAPABILITIES } from "../../src/cli/capabilities-lab";
+import { BUNDLED_TOOL_CAPABILITIES } from "../../src/cli/capabilities-bundled-tools";
 import { CAPABILITY_DATA_FILES, capabilityDataBoundary } from "../helpers/cli-capability-data";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -304,6 +305,8 @@ describe("capability facade and optional usage consumers", () => {
     base.CAPABILITIES.forEach((row, index) => expect(facade.CAPABILITIES[index]).toBe(row));
     expect(new Set(facade.CAPABILITIES.map(row => row.command.join(" "))).size).toBe(facade.CAPABILITIES.length);
     expect(facade.CAPABILITIES.slice(base.CAPABILITIES.length)).toEqual([
+      // Haly: bundled RTK and Headroom rows follow the base table.
+      ...BUNDLED_TOOL_CAPABILITIES,
       ...PROVIDER_MODEL_CAPABILITIES,
       ...ACCOUNT_CAPABILITIES,
       ...AGENT_ROUTING_CAPABILITIES,

@@ -592,7 +592,8 @@ describe("oauth refresh hardening", () => {
   describe("Anthropic real-adapter transport intent", () => {
     const proxyKeys = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
     const proxyKeyNames = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
-    const dns = { code: "ENOTFOUND", syscall: "getaddrinfo", hostname: "api.anthropic.com" };
+    // Haly: Claude Code's own token host (src/oauth/anthropic.ts TOKEN_URL).
+    const dns = { code: "ENOTFOUND", syscall: "getaddrinfo", hostname: "platform.claude.com" };
     const scenarios: Array<{
       name: string; outcome: "retry" | "blocked" | "reauth";
       first: () => Promise<Response>; proxy?: string; redirectStatus?: number;
@@ -625,7 +626,7 @@ describe("oauth refresh hardening", () => {
           if (String(input) === "https://api.anthropic.com/api/oauth/profile") {
             return Response.json({ account: { uuid: "synthetic-account-a" } });
           }
-          expect(String(input)).toBe("https://api.anthropic.com/v1/oauth/token");
+          expect(String(input)).toBe("https://platform.claude.com/v1/oauth/token");
           tokenInits.push(init!);
           if (tokenInits.length === 1) return scenario.first();
           return Response.json({ access_token: "fresh", refresh_token: "rt-fresh", expires_in: 3600 });
@@ -675,7 +676,7 @@ describe("oauth refresh hardening", () => {
         if (String(input) === "https://api.anthropic.com/api/oauth/profile") {
           return Response.json({ account: { uuid: "synthetic-account-a" } });
         }
-        assert.equal(String(input), "https://api.anthropic.com/v1/oauth/token");
+        assert.equal(String(input), "https://platform.claude.com/v1/oauth/token");
         inits.push(init);
         if (inits.length === 1) throw dns;
         return Response.json({ access_token: "fresh", refresh_token: "rt-fresh", expires_in: 3600 });
