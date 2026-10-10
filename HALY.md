@@ -44,6 +44,8 @@ que esperam outro comportamento foram ajustados com comentários `Haly (dario pa
 6. Apontar `~/.local/lib/node_modules/@bitkyc08/opencodex` para `node_modules/@bitkyc08/opencodex` da nova pasta e rodar
    `ocx service restart`. O proxy roda pelo serviço systemd `opencodex-proxy`: o `ocx restart` de um CLI mais novo não troca
    a versão de um proxy supervisionado (falha com `update_restart_eligibility_failed`), e o `ocx service restart` regrava a
-   unit a partir da instalação atual antes de reiniciar.
+   unit a partir da instalação atual antes de reiniciar. Se o `ocx status` mostrar o serviço parado e um proxy avulso
+   ocupando a porta ("service installed, not running"), usar `ocx service install`: ele para o serviço e o proxy avulso
+   antes de regravar a unit; o `ocx service restart` não para o proxy avulso.
 
 Rollback: apontar o link de volta para a pasta anterior em `~/.local/opt/opencodex-haly/` e `ocx service restart`.
