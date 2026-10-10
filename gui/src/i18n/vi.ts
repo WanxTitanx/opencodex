@@ -538,6 +538,7 @@ export const vi: Record<TKey, string> = {
   "dash.updateReason.already_latest": "đã ở phiên bản mới nhất",
   "dash.updateReason.externally_managed": "được mise quản lý bên ngoài; hãy chạy lệnh được hiển thị",
   "dash.updateReason.external_ownership_invalid": "siêu dữ liệu quyền sở hữu của mise không đọc được hoặc không nhất quán",
+  "dash.updateReason.haly_local_build": "bản dựng Haly cục bộ; hãy cập nhật từ nhánh haly-sync (xem HALY.md)",
   "dash.updateReason.unknown": "cập nhật không khả dụng",
   "dash.updateRestart": "Khởi động lại sau khi cập nhật",
   "dash.updateRestartHint": "Khuyên dùng. GUI hiện tại vẫn tiếp tục chạy mã nguồn cũ cho đến khi proxy khởi động lại.",

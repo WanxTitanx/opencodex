@@ -412,6 +412,7 @@ export const zhTW: Record<TKey, string> = {
   "dash.updateReason.already_latest": "已是最新版本",
   "dash.updateReason.externally_managed": "由 mise 外部管理；請執行顯示的命令",
   "dash.updateReason.external_ownership_invalid": "mise 擁有權中繼資料無法讀取或不一致",
+  "dash.updateReason.haly_local_build": "本機 Haly 建置；請從 haly-sync 分支更新（見 HALY.md）",
   "dash.updateReason.unknown": "無法更新",
   "dash.updateRestart": "更新後重新啟動",
   "dash.updateRestartHint": "推薦開啟。代理重新啟動前，當前 GUI 仍執行舊程式碼。",

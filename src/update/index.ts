@@ -21,6 +21,7 @@ import {
   detectInstallFromPath,
   detectInstallOwnershipFromPath,
 } from "./install-detection.mjs";
+import { HALY_LOCAL_BUILD_UPDATE_REFUSAL, isHalyLocalBuild } from "./haly-local-build.mjs";
 import type {
   DetectedInstall,
   InstallOwnership,
@@ -408,6 +409,11 @@ async function resolvedRuntimeOwnership(): Promise<RuntimeOwnershipObservation> 
  * Bun binary.
  */
 export async function runUpdate(): Promise<void> {
+  if (isHalyLocalBuild(packageRoot())) {
+    console.error(`opencodex: ${HALY_LOCAL_BUILD_UPDATE_REFUSAL}`);
+    process.exitCode = 1;
+    return;
+  }
   const ownership = detectInstallOwnership();
   const installer = ownership.installer;
   const current = currentVersion();

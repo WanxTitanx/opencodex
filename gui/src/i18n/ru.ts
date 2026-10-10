@@ -536,6 +536,7 @@ export const ru: Record<TKey, string> = {
   "dash.updateReason.already_latest": "уже установлена последняя версия",
   "dash.updateReason.externally_managed": "управляется mise; выполните показанную команду",
   "dash.updateReason.external_ownership_invalid": "метаданные владельца mise недоступны или противоречивы",
+  "dash.updateReason.haly_local_build": "локальная сборка Haly; обновляйте её из ветки haly-sync (см. HALY.md)",
   "dash.updateReason.unknown": "обновление недоступно",
   "dash.updateRestart": "Перезапустить после обновления",
   "dash.updateRestartHint": "Рекомендуется. Текущий GUI продолжает работать на старом коде, пока прокси не перезапустится.",

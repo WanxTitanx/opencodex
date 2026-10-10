@@ -206,6 +206,7 @@ export function updateReasonLabel(reason: string | undefined, t: (key: TKey) => 
     case "already_latest": return t("dash.updateReason.already_latest");
     case "externally_managed": return t("dash.updateReason.externally_managed");
     case "external_ownership_invalid": return t("dash.updateReason.external_ownership_invalid");
+    case "haly_local_build": return t("dash.updateReason.haly_local_build");
     default: return t("dash.updateReason.unknown");
   }
 }

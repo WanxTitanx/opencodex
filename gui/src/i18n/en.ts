@@ -548,6 +548,7 @@ export const en = {
   "dash.updateReason.already_latest": "already on latest",
   "dash.updateReason.externally_managed": "managed externally by mise; run the shown command",
   "dash.updateReason.external_ownership_invalid": "mise ownership metadata is unreadable or inconsistent",
+  "dash.updateReason.haly_local_build": "local Haly build; update it from the haly-sync branch (see HALY.md)",
   "dash.updateReason.unknown": "update unavailable",
   "dash.updateRestart": "Restart after update",
   "dash.updateRestartHint": "Recommended. The current GUI keeps running the old code until the proxy restarts.",

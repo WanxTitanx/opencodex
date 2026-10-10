@@ -531,6 +531,7 @@ export const zh: Record<TKey, string> = {
   "dash.updateReason.already_latest": "已是最新版本",
   "dash.updateReason.externally_managed": "由 mise 外部管理；请运行显示的命令",
   "dash.updateReason.external_ownership_invalid": "mise 所有权元数据无法读取或不一致",
+  "dash.updateReason.haly_local_build": "本地 Haly 构建；请从 haly-sync 分支更新（见 HALY.md）",
   "dash.updateReason.unknown": "无法更新",
   "dash.updateRestart": "更新后重启",
   "dash.updateRestartHint": "推荐开启。代理重启前，当前 GUI 仍运行旧代码。",

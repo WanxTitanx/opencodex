@@ -540,6 +540,7 @@ export const tr: Record<TKey, string> = {
   "dash.updateReason.already_latest": "zaten en son sürümde",
   "dash.updateReason.externally_managed": "mise tarafından harici olarak yönetiliyor; gösterilen komutu çalıştırın",
   "dash.updateReason.external_ownership_invalid": "mise sahiplik meta verileri okunamıyor veya tutarsız",
+  "dash.updateReason.haly_local_build": "yerel Haly derlemesi; haly-sync dalından güncelleyin (bkz. HALY.md)",
   "dash.updateReason.unknown": "güncelleme kullanılamıyor",
   "dash.updateRestart": "Güncellemeden sonra yeniden başlat",
   "dash.updateRestartHint": "Önerilir. Proxy yeniden başlayana kadar mevcut GUI eski kodu çalıştırmaya devam eder.",

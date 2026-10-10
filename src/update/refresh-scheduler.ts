@@ -2,6 +2,11 @@ import { checkForUpdate, type UpdateCheckResult } from "./job";
 import { currentVersion, defaultUpdateTag, detectInstall, detectInstallOwnership, miseUpdateCommand, type Channel, type Installer } from "./index";
 import { isSourceBuildVersion, readVersionCache, REFRESH_INTERVAL_MS, writeFreshVersionCache } from "./notify";
 import { latestVersionAsync } from "./async-check";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { isHalyLocalBuild } from "./haly-local-build.mjs";
+
+const HALY_PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 export const STALENESS_TICK_MS = 60 * 60 * 1000;
 export const RETRY_BASE_MS = 60_000;
@@ -124,13 +129,17 @@ export function createRefreshScheduler(deps: RefreshDeps = defaults) {
     async check(tag: Channel): Promise<UpdateCheckResult> {
       const installer = deps.install();
       const latest = installer === "source" || installer === "mise" ? null : await lookup(tag, false);
-      return checkForUpdate(tag, {
+      const result = checkForUpdate(tag, {
         currentVersion: deps.current,
         detectInstall: deps.install,
         detectInstallOwnership: deps.ownership,
         miseUpdateCommand: deps.guidance,
         latestVersion: () => latest,
       });
+      // Haly: a marked local build never offers the published package as its update.
+      return isHalyLocalBuild(HALY_PACKAGE_ROOT)
+        ? { ...result, canUpdate: false, command: "", reason: "haly_local_build" }
+        : result;
     },
   };
 }

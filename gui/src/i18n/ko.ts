@@ -534,6 +534,7 @@ export const ko: Record<TKey, string> = {
   "dash.updateReason.already_latest": "이미 최신 버전",
   "dash.updateReason.externally_managed": "mise에서 외부 관리 중입니다. 표시된 명령을 실행하세요",
   "dash.updateReason.external_ownership_invalid": "mise 소유권 메타데이터를 읽을 수 없거나 일관되지 않습니다",
+  "dash.updateReason.haly_local_build": "로컬 Haly 빌드입니다. haly-sync 브랜치에서 업데이트하세요(HALY.md 참고)",
   "dash.updateReason.unknown": "업데이트 불가",
   "dash.updateRestart": "업데이트 후 재시작",
   "dash.updateRestartHint": "권장. 프록시를 재시작하기 전까지 현재 GUI는 이전 코드로 계속 실행됩니다.",

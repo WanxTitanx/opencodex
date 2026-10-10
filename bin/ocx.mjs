@@ -41,6 +41,7 @@ import { findDesktopCli, findPathBun } from "../src/lib/bun-path-runtime.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
 import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "../src/update/install-detection.mjs";
+import { HALY_LOCAL_BUILD_UPDATE_REFUSAL, isHalyLocalBuild } from "../src/update/haly-local-build.mjs";
 import {
   pnpmOwnerInvocation,
   resolvePnpmGlobalOwner,
@@ -1060,6 +1061,11 @@ if (process.argv[2] === "update" && installMethod === "mise") {
       "opencodex: this installation appears to be managed by mise, but its ownership metadata is unreadable or inconsistent; repair the mise installation metadata before updating.",
     );
   }
+  process.exit(1);
+}
+
+if (process.argv[2] === "update" && isHalyLocalBuild(resolve(here, ".."))) {
+  console.error(`opencodex: ${HALY_LOCAL_BUILD_UPDATE_REFUSAL}`);
   process.exit(1);
 }
 

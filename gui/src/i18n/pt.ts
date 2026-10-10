@@ -635,6 +635,7 @@ export const pt: Record<TKey, string> = {
   "dash.updateReason.already_latest": "já está na versão mais recente",
   "dash.updateReason.externally_managed": "gerenciado externamente pelo mise; execute o comando exibido",
   "dash.updateReason.external_ownership_invalid": "os metadados de propriedade do mise estão ilegíveis ou inconsistentes",
+  "dash.updateReason.haly_local_build": "build local Haly; atualize pelo branch haly-sync (veja HALY.md)",
   "dash.updateReason.unknown": "atualização indisponível",
   "dash.updateRestart": "Reiniciar após atualizar",
   "dash.updateRestartHint": "Recomendado. A GUI atual continua executando o código antigo até o proxy reiniciar.",
