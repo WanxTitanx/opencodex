@@ -717,13 +717,11 @@ describe("A/B native wire features", () => {
       expect(result.response.status, result.text).toBe(200);
       const observed = JSON.stringify(sent.at(-1)!.body.messages);
       expect(observed).toContain("fixture earlier response");
-      if (instance === "anthropic") {
-        expect(observed).toContain("synthetic-thinking-signature");
-        expect(observed).toContain("synthetic-redacted-data");
-      } else {
-        expect(observed).not.toContain("synthetic-thinking-signature");
-        expect(observed).not.toContain("synthetic-redacted-data");
-      }
+      // Haly (dario parity): the synthesized Claude Code body never replays signed thinking
+      // under our OAuth bearer, whichever identity minted it; the opaque redacted block is the
+      // caller's own and rides along unchanged (see HALY.md, known divergences).
+      expect(observed).not.toContain("synthetic-thinking-signature");
+      expect(observed).toContain("synthetic-redacted-data");
     }
   });
   const signature = "synthetic-thinking-signature";
@@ -781,11 +779,14 @@ describe("A/B native wire features", () => {
         wires.push(normalized);
         const serialized = JSON.stringify(feature.inspect(wire));
         if (feature.label.startsWith("thinking")) {
-          expect(serialized).toContain(signature);
+          // Haly (dario parity): only the native lane forwards signed thinking verbatim.
+          if (nativeLane) expect(serialized).toContain(signature);
+          else expect(serialized).not.toContain(signature);
           expect(serialized).toContain("synthetic-redacted-data");
         }
         if (feature.label.startsWith("tools")) {
-          expect(serialized).toContain("custom_lookup");
+          // Haly (dario parity): the synthesized lane keeps an Anthropic-native caller's tool names.
+          expect(serialized).toContain(nativeLane ? "custom_lookup" : '"name":"lookup"');
           expect(serialized).toContain("toolu_one");
           expect(serialized).toContain("toolu_two");
         }

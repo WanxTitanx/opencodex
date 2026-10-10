@@ -47,6 +47,7 @@ import type { AnthropicAccountPoolConfig } from "../types/anthropic-account-pool
 import { configuredAnthropicInstance, isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance";
 import { resolveAnthropicAccountPoolConfig } from "./anthropic-pool-config";
 import { anthropicPoolKey } from "./pool-kernel";
+import { anthropicSnapshotIdentity } from "./anthropic-snapshot-identity";
 import type { GenerationContext } from "../lib/state-store-sweeper";
 
 /**
@@ -1235,7 +1236,8 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
       || row.credential.expires <= Date.now()) {
       throw new Error("Anthropic pool credential changed during account selection");
     }
-    return { provider: PROVIDER, accountId, accessToken, generation: credentialGeneration(row.credential) };
+    return { provider: PROVIDER, accountId, accessToken, generation: credentialGeneration(row.credential),
+      ...anthropicSnapshotIdentity(row.credential) };
   }
 
   /**

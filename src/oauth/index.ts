@@ -32,6 +32,8 @@ import {
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError } from "./anthropic";
 import { isAnthropicOAuthInstance, anthropicInstanceRowShapeMatches } from "../providers/anthropic-instance";
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
+import { anthropicSnapshotIdentity } from "./anthropic-snapshot-identity";
 import { captureModelsOAuthTarget, guardModelsOAuthRequest, mayResolveModelsOAuth } from "./model-discovery-auth";
 import { anthropicOAuthDefinition, assertAnthropicInstanceLoginConfig, AnthropicInstanceCollisionError,
   clearAnthropicRefreshIntentBestEffort, clearAnthropicRefreshIntentForKnownFailure,
@@ -544,8 +546,8 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
       : {}),
     // Claude Code identity travels with the account — a failover to a different OAuth
     // account must carry THAT account's device/account/session triple, never borrow
-    // the previous one's.
-    ...(provider === "anthropic" && cred.anthropic ? { anthropic: cred.anthropic } : {}),
+    // the previous one's. Both Anthropic pools carry it (Pool 2 included).
+    ...(isAnthropicInstanceId(provider) ? anthropicSnapshotIdentity(cred) : {}),
   };
 }
 

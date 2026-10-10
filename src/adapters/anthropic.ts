@@ -1043,9 +1043,14 @@ async function buildClaudeSubscriptionRequest(
 
   const configuredMaxOut = modelRecordValue(provider.modelMaxOutputTokens, wireModel)
     ?? provider.defaultMaxOutputTokens;
-  const maxTokens = typeof configuredMaxOut === "number" && configuredMaxOut > 0
-    ? configuredMaxOut
-    : CLAUDE_DEFAULT_MAX_TOKENS;
+  // A caller's explicit output limit wins (Codex sends none, so its turns keep the CC
+  // default); real CC varies max_tokens per call, so honoring it costs no fingerprint.
+  const explicitMaxOut = parsed.options.maxOutputTokens;
+  const maxTokens = typeof explicitMaxOut === "number" && explicitMaxOut > 0
+    ? explicitMaxOut
+    : typeof configuredMaxOut === "number" && configuredMaxOut > 0
+      ? configuredMaxOut
+      : CLAUDE_DEFAULT_MAX_TOKENS;
 
   let body: Record<string, unknown>;
   const genuine = sourceBody !== undefined && isGenuineClaudeCodeBody(sourceBody);

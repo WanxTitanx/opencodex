@@ -179,7 +179,7 @@ export async function rotateAnthropicAccountOnResponseForInstance(
     }
     if (options.allow429Recovery === false) {
       options.currentDecision?.();
-      recordAnthropicAccountRefusal(options.config, options.accountId, 429, response.headers.get("retry-after"), Date.now(), response.headers);
+      recordAnthropicAccountRefusal(options.config, options.accountId, 429, response.headers.get("retry-after"), Date.now(), response.headers, options.model);
       return null;
     }
   } else {
@@ -199,7 +199,7 @@ export async function rotateAnthropicAccountOnResponseForInstance(
   const status = response.status === 429 ? 429 : 403;
   if (!options.canRetry) {
     recordAnthropicAccountRefusal(options.config, options.accountId, status,
-      response.headers.get("retry-after"), Date.now(), response.headers);
+      response.headers.get("retry-after"), Date.now(), response.headers, options.model);
     return null;
   }
   return rotateAnthropicAccountOnRefusal(options.config, options.accountId, status,

@@ -11,6 +11,9 @@ import {
   getAnthropicAccountHealthSnapshot,
   resetAnthropicRoutingForManualSelection,
   resolveAnthropicAccountForSession,
+  // Haly: the model-family overlay reads every bucket header, so it needs the live Headers
+  // object rather than the shared-quota helper's get-only wrapper.
+  rotateAnthropicAccountOn429 as rotateAnthropicAccountOn429WithHeaders,
 } from "../../../src/oauth/anthropic-routing";
 import { projectStoredOAuthAccountHealth } from "../../../src/oauth/health";
 import { quotaEvidenceForCandidate } from "../../../src/routing/quota";
@@ -240,39 +243,42 @@ describe("Anthropic cooldown honours the stated window", () => {
     const start = Date.now();
     const ids = await seed(2);
     const reset = Math.floor((start + 3 * 24 * 60 * 60_000) / 1000);
+    // Haly overlay contract (src/oauth/anthropic-model-cooldown.ts): a named per-family weekly
+    // bucket at its limit parks only that family on the account. Shared-window and 7d_oi
+    // rejections stay with upstream's own policy.
     const headers = new Headers({
-      "anthropic-ratelimit-unified-status": "rejected",
+      "anthropic-ratelimit-unified-status": "allowed_warning",
       "anthropic-ratelimit-unified-5h-status": "allowed_warning",
       "anthropic-ratelimit-unified-5h-reset": String(reset),
       "anthropic-ratelimit-unified-5h-utilization": "0.03",
       "anthropic-ratelimit-unified-7d-status": "allowed_warning",
       "anthropic-ratelimit-unified-7d-reset": String(reset),
       "anthropic-ratelimit-unified-7d-utilization": "0.83",
-      "anthropic-ratelimit-unified-7d_oi-status": "rejected",
-      "anthropic-ratelimit-unified-7d_oi-utilization": "1.02",
-      "anthropic-ratelimit-unified-representative-claim": "seven_day_overage_included",
+      "anthropic-ratelimit-unified-7d_opus-status": "rejected",
+      "anthropic-ratelimit-unified-7d_opus-utilization": "1.02",
+      "anthropic-ratelimit-unified-7d_opus-reset": String(reset),
     });
 
-    expect(rotateAnthropicAccountOn429(poolEnabled(), ids[0]!, "30", null, start, headers, "claude-fable-5")).toBe(ids[1]);
+    expect(rotateAnthropicAccountOn429WithHeaders(poolEnabled(), ids[0]!, "30", null, start, headers, "claude-opus-5")).toBe(ids[1]);
     expect(getAnthropicAccountHealthSnapshot(ids[0]!, start)).toBeNull();
-    expect(getAnthropicAccountHealthSnapshot(ids[0]!, start, "claude-fable-5")).toEqual({
+    expect(getAnthropicAccountHealthSnapshot(ids[0]!, start, "claude-opus-5")).toEqual({
       cooldownUntil: reset * 1000,
       cooldownSource: "reset-derived",
     });
-    expect(getAnthropicAccountHealthSnapshot(ids[0]!, start, "claude-opus-5")).toBeNull();
+    expect(getAnthropicAccountHealthSnapshot(ids[0]!, start, "claude-sonnet-5")).toBeNull();
     await setActiveAccount("anthropic", ids[0]!);
     const reactiveOnly = { ...poolEnabled(), anthropicAccountPool: { enabled: false } } as OcxConfig;
-    expect(resolveAnthropicAccountForSession("reactive-fable", reactiveOnly, start, "claude-fable-5").accountId).toBe(ids[1]);
-    expect(resolveAnthropicAccountForSession("reactive-opus", reactiveOnly, start, "claude-opus-5").accountId).toBe(ids[0]);
-    expect(resolveAnthropicAccountForSession("fable-session", poolEnabled(), start, "claude-fable-5").accountId).toBe(ids[1]);
-    expect(resolveAnthropicAccountForSession("opus-session", poolEnabled(), start, "claude-opus-5").accountId).toBe(ids[0]);
+    expect(resolveAnthropicAccountForSession("reactive-opus", reactiveOnly, start, "claude-opus-5").accountId).toBe(ids[1]);
+    expect(resolveAnthropicAccountForSession("reactive-sonnet", reactiveOnly, start, "claude-sonnet-5").accountId).toBe(ids[0]);
+    expect(resolveAnthropicAccountForSession("opus-session", poolEnabled(), start, "claude-opus-5").accountId).toBe(ids[1]);
+    expect(resolveAnthropicAccountForSession("sonnet-session", poolEnabled(), start, "claude-sonnet-5").accountId).toBe(ids[0]);
 
     recordAnthropicAccountQuotaFromHeaders(ids[0]!, new Headers({
       "anthropic-ratelimit-unified-7d-status": "allowed_warning",
       "anthropic-ratelimit-unified-7d-utilization": "0.83",
     }), 0);
-    expect(getAnthropicAccountHealthSnapshot(ids[0]!, start, "claude-fable-5")?.cooldownUntil).toBe(reset * 1000);
-    expect(resolveAnthropicAccountForSession("opus-session-2", poolEnabled(), start, "claude-opus-5").accountId).toBe(ids[0]);
+    expect(getAnthropicAccountHealthSnapshot(ids[0]!, start, "claude-opus-5")?.cooldownUntil).toBe(reset * 1000);
+    expect(resolveAnthropicAccountForSession("sonnet-session-2", poolEnabled(), start, "claude-sonnet-5").accountId).toBe(ids[0]);
   });
 });
 

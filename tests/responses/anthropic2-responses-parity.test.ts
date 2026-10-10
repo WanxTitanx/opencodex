@@ -88,10 +88,26 @@ async function send(surface: Surface, instance: AnthropicInstanceId, body: Recor
   }
   return { text, log };
 }
+/**
+ * Haly: Claude OAuth bodies sign `metadata.user_id` with the serving account's own identity,
+ * so the two pools legitimately differ there. Normalize it the way the native-lane parity suite
+ * does and compare everything else exactly.
+ */
+function comparableBody(body: Record<string, unknown>): Record<string, unknown> {
+  const copy = structuredClone(body);
+  const metadata = copy.metadata as { user_id?: string } | undefined;
+  if (metadata?.user_id) {
+    const user = JSON.parse(metadata.user_id) as Record<string, unknown>;
+    if (user.account_uuid) user.account_uuid = "normalized-provider-uuid";
+    if (user.session_id) user.session_id = "normalized-conversation-id";
+    metadata.user_id = JSON.stringify(user);
+  }
+  return copy;
+}
 function expectPair(model = f.model) {
   expect(seen).toHaveLength(2);
   expect(seen.map(send => send.instance)).toEqual(["anthropic", "anthropic2"]);
-  expect(seen[0]!.body).toEqual(seen[1]!.body);
+  expect(comparableBody(seen[0]!.body)).toEqual(comparableBody(seen[1]!.body));
   for (const send of seen) {
     expect(send.url).toBe("https://api.anthropic.com/v1/messages");
     expect(send.body.model).toBe(model);
@@ -141,9 +157,12 @@ for (const surface of ["responses", "chat", "messages"] as const) {
       expect(text).toContain('"name":"lookup"'); expect(text).not.toContain("custom_lookup");
     }
     expectPair();
-    expect(seen[0]!.body.tool_choice).toMatchObject({ type: "auto", disable_parallel_tool_use: true });
+    // Haly (dario parity): the synthesized Claude Code body carries no tool_choice, and an
+    // Anthropic-native caller keeps its own tool names (translated callers get the prefix).
+    expect(seen[0]!.body.tool_choice).toBeUndefined();
     const wire = JSON.stringify(seen[0]!.body);
-    expect(wire).toContain("custom_lookup"); expect(wire).toContain("tool_result"); expect(wire).toContain("prior result");
+    expect(wire).toContain(surface === "messages" ? '"name":"lookup"' : "custom_lookup");
+    expect(wire).toContain("tool_result"); expect(wire).toContain("prior result");
   });
 
   test(`${surface}: cache TTL and real image block survive translation for both instances`, async () => {
@@ -161,7 +180,9 @@ for (const surface of ["responses", "chat", "messages"] as const) {
     expectPair();
     const wire = JSON.stringify(seen[0]!.body);
     expect(wire).toContain('"type":"image"'); expect(wire).toContain('"media_type":"image/png"');
-    expect(wire).toContain('"ttl":"1h"');
+    // Haly (dario parity): bare 5-minute CC breakpoints; a 1h ttl is mirrored only beside the
+    // client's own extended-cache-ttl beta, which none of these callers send.
+    expect(wire).toContain('"cache_control":{"type":"ephemeral"}'); expect(wire).not.toContain('"ttl":"1h"');
   });
 
   test(`${surface}: adaptive thinking, effort and explicit output limits retain parity`, async () => {
@@ -188,7 +209,9 @@ test("native-ineligible Messages preserves thinking signatures and redacted stat
   for (const instance of ["anthropic", "anthropic2"] as const) await send("messages", instance, body, "claude-opus-5-5");
   expectPair("claude-opus-5-5");
   const wire = JSON.stringify(seen[0]!.body);
-  expect(wire).toContain(SIGNATURE); expect(wire).toContain(REDACTED); expect(wire).toContain("Synthetic prior reasoning");
+  // Haly (dario parity): signed thinking is the caller credential's own proof, so the
+  // synthesized body drops it under our OAuth bearer; the opaque redacted block survives.
+  expect(wire).not.toContain(SIGNATURE); expect(wire).not.toContain("Synthetic prior reasoning"); expect(wire).toContain(REDACTED);
 });
 
 test("an operator cross-provider redirect may move a Pool 2 selector; the send uses the target's own pool", async () => {

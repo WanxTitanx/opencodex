@@ -253,6 +253,9 @@ export async function prepareResponsesTransport(
         )) return null;
         oauthSelection = committed;
         servingOAuthSnapshot = candidate;
+        // Haly: every committed Anthropic account (initial, proactive, rotation and the
+        // dispatch-time pool recovery) re-stamps the identity the next build signs with.
+        if (anthropicInstance !== undefined) stampAnthropicIdentity(candidate);
         if (anthropicInstance) replayOAuthCredentialSnapshot = { accountId: candidate.accountId, generation: candidate.generation };
         forgetGenericFailoverRoster(route.providerName);
         return candidate;
