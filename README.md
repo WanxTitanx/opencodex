@@ -1,6 +1,4 @@
 <p align="center">
-
-
   <img src="assets/banner.png" alt="opencodex — universal provider proxy for Codex, Claude Code, Claude Desktop and Grok Build" width="100%">
 </p>
 
@@ -14,8 +12,6 @@ Two commands, and every one of them runs any LLM you point it at.</p>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node version">
 </p>
-
-> Haly integration candidate: stable upstream `v2.78.0` plus Haly extensions and bundled RTK `0.50.0`. The package uses the upstream development version line `2.79.0`; it is not an official 2.79.0 release. API keys are under Connect; Headroom is under Usage & Logs.
 
 ```bash
 npm install -g @bitkyc08/opencodex
@@ -488,7 +484,3 @@ Some providers — notably Anthropic (Claude) — may suspend or restrict accoun
 ## License
 
 MIT
-
-### Built-in RTK
-
-Run `ocx rtk git status`, `ocx rtk git diff`, or `ocx rtk --help` to use the RTK command-output filter included with OpenCodex. No separate RTK installation is required. See the [RTK guide](docs-site/src/content/docs/guides/rtk.md) for usage and packaging details.
