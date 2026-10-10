@@ -34,7 +34,7 @@ opencodex는 요청된 model을 다음 순서로 해석합니다:
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-6-luna" }
 }
 ```
 

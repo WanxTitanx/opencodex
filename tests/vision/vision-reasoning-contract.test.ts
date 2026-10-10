@@ -61,7 +61,7 @@ describe("vision reasoning capability contracts", () => {
   test("native management rows expose vision-safe reasoning ladders", async () => {
     // This contract is about the effort ladders themselves; Sol/Luna are account-gated,
     // so confirm a roster or their rows would be filtered before the ladder is read.
-    seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol", "gpt-5.6-luna"]);
+    seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol", "gpt-6-luna"]);
     const config: OcxConfig = { port: 10100, defaultProvider: "none", providers: {} };
     const rows = await listManagementModelRows(config);
     const efforts = (id: string) => (rows.find(row => row.native === true && row.id === id) as
@@ -69,7 +69,7 @@ describe("vision reasoning capability contracts", () => {
       | undefined)?.reasoningEfforts;
 
     expect(efforts("gpt-5.5")).toEqual(["low", "medium", "high", "xhigh"]);
-    expect(efforts("gpt-5.6-luna")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(efforts("gpt-6-luna")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(efforts("gpt-5.6-sol")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(efforts("gpt-5.6-sol")).not.toContain("ultra");
   });
@@ -85,7 +85,7 @@ describe("vision reasoning capability contracts", () => {
       const response = await getVision(config);
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
-        vision: { model: "gpt-5.6-luna", reasoning: "max" },
+        vision: { model: "gpt-6-luna", reasoning: "max" },
       });
       // Reads report effective execution state without mutating a hand-edited config in memory.
       expect(config.visionSidecar?.reasoning).toBe("max");
@@ -125,7 +125,7 @@ describe("vision reasoning capability contracts", () => {
       response = await putVision(unsetModel, { reasoning: "max" });
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
-        vision: { model: "gpt-5.6-luna", reasoning: "max" },
+        vision: { model: "gpt-6-luna", reasoning: "max" },
       });
       expect(unsetModel.visionSidecar?.model).toBeUndefined();
       expect(unsetModel.visionSidecar?.reasoning).toBe("max");
@@ -134,7 +134,7 @@ describe("vision reasoning capability contracts", () => {
         port: 10100,
         defaultProvider: "none",
         providers: {},
-        visionSidecar: { model: "gpt-5.6-luna", reasoning: "max" },
+        visionSidecar: { model: "gpt-6-luna", reasoning: "max" },
       } as OcxConfig;
       response = await putVision(modelOnly, { model: "gpt-5.5" });
       expect(response.status).toBe(200);
@@ -149,7 +149,7 @@ describe("vision reasoning capability contracts", () => {
       response = await putVision(reset, { model: "" });
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
-        vision: { model: "gpt-5.6-luna", reasoning: "max" },
+        vision: { model: "gpt-6-luna", reasoning: "max" },
       });
       expect(reset.visionSidecar?.model).toBeUndefined();
       expect(reset.visionSidecar?.reasoning).toBe("max");
@@ -182,7 +182,7 @@ describe("vision reasoning capability contracts", () => {
       expect(await handleConfigCommand(["import", importPath, "--yes", "--json"])).toBe(0);
       persisted = JSON.parse(readFileSync(join(isolatedHome, "config.json"), "utf8"));
       expect(persisted.visionSidecar).toMatchObject({ model: "", reasoning: "max" });
-      expect(resolveOpenAiVisionModel({ visionSidecar: persisted.visionSidecar })).toBe("gpt-5.6-luna");
+      expect(resolveOpenAiVisionModel({ visionSidecar: persisted.visionSidecar })).toBe("gpt-6-luna");
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
@@ -198,18 +198,18 @@ describe("vision reasoning capability contracts", () => {
       port: 10100,
       defaultProvider: "none",
       providers: {},
-      visionSidecar: { model: "gpt-5.6-luna", reasoning: "high", maxDescriptionsPerTurn: 8 },
+      visionSidecar: { model: "gpt-6-luna", reasoning: "high", maxDescriptionsPerTurn: 8 },
     } as OcxConfig;
 
     try {
       let response = await putVision(config, { reasoning: "ultra" });
       expect(response.status).toBe(400);
-      expect(config.visionSidecar).toMatchObject({ model: "gpt-5.6-luna", reasoning: "high" });
+      expect(config.visionSidecar).toMatchObject({ model: "gpt-6-luna", reasoning: "high" });
 
       response = await putVision(config, { maxDescriptionsPerTurn: 4 });
       expect(response.status).toBe(200);
       expect(config.visionSidecar).toMatchObject({
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         reasoning: "high",
         maxDescriptionsPerTurn: 4,
       });

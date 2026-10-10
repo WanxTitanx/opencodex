@@ -677,7 +677,7 @@ as wildcards in both modes.
   "combos": {
     "mixed": {
       "targets": [
-        { "provider": "openai-apikey", "model": "gpt-5.6-luna" },
+        { "provider": "openai-apikey", "model": "gpt-6-luna" },
         { "provider": "local", "model": "no-effort-model" }
       ],
       "reasoningEffortMode": "adaptive"

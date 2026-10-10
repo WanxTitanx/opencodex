@@ -242,7 +242,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // never silently moves a deliberate subscriber onto proxy.
   if (runClaudeAuthModeMigration(config)) saveConfig(config);
   // Retired Codex-login models: a stored gpt-5.4-mini is a guaranteed 404 for the search and
-  // vision sidecars and for pool warmup, so it moves to gpt-5.6-luna. Extracted so the rule is
+  // vision sidecars and for pool warmup, so it moves to gpt-6-luna. Extracted so the rule is
   // testable on its own; see src/codex/retired-model-migration.ts for why exact equality also
   // rewrites an explicit choice.
   if (runRetiredCodexModelMigration(config)) saveConfig(config);

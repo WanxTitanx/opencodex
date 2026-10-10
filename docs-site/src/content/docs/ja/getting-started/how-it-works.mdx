@@ -95,7 +95,7 @@ Codex は OpenAI **Responses API** を使います。opencodex は HTTP と Serv
 
 6. **ウェブ検索サイドカー(任意)** — Codex がホスト型 `web_search` を有効化したがルーティングされたモデルが
    OpenAI ではない場合、opencodex は合成 `web_search` function tool を公開し、モデルを小さな
-   エージェントループで実行しながら、デフォルトの `gpt-5.6-luna` を ChatGPT ログインで呼び出して実際の検索を行い、
+   エージェントループで実行しながら、デフォルトの `gpt-6-luna` を ChatGPT ログインで呼び出して実際の検索を行い、
    その結果をツール結果として再注入します。
 
 7. **Compact(要求時)** — Codex v1 は `POST /v1/responses/compact` を呼び出し、v2 は Responses

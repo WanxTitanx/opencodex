@@ -12,6 +12,7 @@ const MODEL_ICON_MAP: Record<string, IconComponent> = {
   "gpt-5.6-sol": IconSun,
   "gpt-5.6-terra": IconGlobe,
   "gpt-5.6-luna": IconMoon,
+  "gpt-6-luna": IconMoon,
   "gpt-daybreak-blue-latest": IconSun,
   "daybreak-blue-latest": IconSun,
   "daybreak-red-latest": IconLock,

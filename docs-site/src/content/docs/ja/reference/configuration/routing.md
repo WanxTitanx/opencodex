@@ -35,7 +35,7 @@ opencodex は、要求されたモデルを次の順序で解決します。
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-6-luna" }
 }
 ```
 

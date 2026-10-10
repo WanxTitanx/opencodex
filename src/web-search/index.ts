@@ -37,7 +37,7 @@ export {
   type WebSearchBackendId,
 };
 
-const DEFAULT_SIDECAR_MODEL = "gpt-5.6-luna";
+const DEFAULT_SIDECAR_MODEL = "gpt-6-luna";
 // Default Claude model for the anthropic-backed sidecar (used when cfg.model is unset).
 const DEFAULT_ANTHROPIC_SIDECAR_MODEL = "claude-sonnet-5";
 // Default Grok model for the xai-backed sidecar (probe-verified with hosted tools, devlog 003).

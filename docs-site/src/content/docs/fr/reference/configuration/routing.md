@@ -35,7 +35,7 @@ Les fournisseurs désactivés sont exclus. Un espace de noms explicite qui dési
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-6-luna" }
 }
 ```
 

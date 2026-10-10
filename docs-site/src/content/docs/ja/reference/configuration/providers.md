@@ -307,7 +307,7 @@ Pool 2 のないバージョンは `anthropic2` エントリを理解しませ�
 | `failureBackoffMaxSeconds?` | `number` | `3600` |バックオフの上限と永続的な障害による遅延。 |
 | `codexWarmupEnabled?` | `boolean` | `false` |合成 Codex プールアカウント検証をオプトインします。 |
 | `codexWarmupMaxAgeSeconds?` | `number` | `691200` | 8 日後にアカウントを再認証します。 |
-| `codexWarmupModel?` | `string` | `gpt-5.6-luna` |オプションのウォームアップに使用されるネイティブ モデル。 |
+| `codexWarmupModel?` | `string` | `gpt-6-luna` |オプションのウォームアップに使用されるネイティブ モデル。 |
 
 ## 固定プロバイダーエンドポイント
 

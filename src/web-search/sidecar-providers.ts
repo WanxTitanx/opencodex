@@ -15,7 +15,7 @@ export type WebSearchBackendId = "openai" | "anthropic" | "xai" | "gemini" | "ex
 /**
  * Precedence: explicit config wins; unset defaults to "openai" (ChatGPT forward path). The
  * anthropic backend (web_search_20250305) is only used when explicitly configured — auto-selecting
- * it from credential availability caused the sidecar to send incompatible models (e.g. gpt-5.6-luna)
+ * it from credential availability caused the sidecar to send incompatible models (e.g. gpt-6-luna)
  * to the Anthropic API.
  * The 2188 follow-up ids (xai/gemini/exa) resolve to themselves the same explicit-only way; their
  * planWebSearch arms stay fail-closed until each executor layer lands.

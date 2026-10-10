@@ -937,7 +937,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     return jsonResponse({
       webSearch: {
         enabled: ws.enabled !== false,
-        model: ws.model ?? "gpt-5.6-luna",
+        model: ws.model ?? "gpt-6-luna",
         backend: ws.backend,
         ...(ws.anthropicInstance ? { anthropicInstance: ws.anthropicInstance } : {}),
         anthropicPool: sidecarAnthropicPoolOptions(config, ws),
@@ -1047,8 +1047,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.vision && (body.vision.model !== undefined || body.vision.reasoning !== undefined)) {
       visionReasoningTouched = true;
       const model = typeof body.vision.model === "string"
-        ? (body.vision.model === "" ? "gpt-5.6-luna" : body.vision.model)
-        : (config.visionSidecar?.model || "gpt-5.6-luna");
+        ? (body.vision.model === "" ? "gpt-6-luna" : body.vision.model)
+        : (config.visionSidecar?.model || "gpt-6-luna");
       const sourceReasoning = body.vision.reasoning ?? config.visionSidecar?.reasoning;
       normalizedVisionReasoning = sourceReasoning === undefined
         ? undefined
@@ -1210,7 +1210,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       ok: true,
       webSearch: {
         enabled: ws.enabled !== false,
-        model: ws.model ?? "gpt-5.6-luna",
+        model: ws.model ?? "gpt-6-luna",
         backend: ws.backend,
         ...(ws.anthropicInstance ? { anthropicInstance: ws.anthropicInstance } : {}),
         anthropicPool: sidecarAnthropicPoolOptions(config, ws),

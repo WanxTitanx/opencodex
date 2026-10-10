@@ -196,9 +196,9 @@ describe("retired Codex model migration", () => {
     } as never as ReturnType<typeof getDefaultConfig>;
 
     expect(runRetiredCodexModelMigration(stored, after)).toBe(true);
-    expect(stored.webSearchSidecar?.model).toBe("gpt-5.6-luna");
-    expect(stored.visionSidecar?.model).toBe("gpt-5.6-luna");
-    expect(stored.tokenGuardian?.codexWarmupModel).toBe("gpt-5.6-luna");
+    expect(stored.webSearchSidecar?.model).toBe("gpt-6-luna");
+    expect(stored.visionSidecar?.model).toBe("gpt-6-luna");
+    expect(stored.tokenGuardian?.codexWarmupModel).toBe("gpt-6-luna");
     // Sibling keys survive: this rewrites one slug, it does not rebuild the block.
     expect(stored.webSearchSidecar?.reasoning).toBe("low");
     expect(stored.tokenGuardian?.codexWarmupEnabled).toBe(true);

@@ -22,7 +22,7 @@ Lorsque Codex demande un hébergement `web_search` pour un modèle routé sans p
 1. **Supprime** l'outil hébergé `web_search` et expose à sa place un outil de fonction synthétique `web_search(query)`
    au modèle routé. Les options de l'outil hébergé d'origine sont conservées pour l'appel du service auxiliaire.
 2. Exécute le modèle routé dans une petite **boucle d'agent**. Lorsqu'il appelle `web_search`, opencodex utilise le
-   moteur du service auxiliaire sélectionné : OpenAI exécute l'outil hébergé `web_search` avec `gpt-5.6-luna` par défaut ;
+   moteur du service auxiliaire sélectionné : OpenAI exécute l'outil hébergé `web_search` avec `gpt-6-luna` par défaut ;
    Anthropic exécute `web_search_20250305` avec `claude-sonnet-5` par défaut. La réponse en streaming et
    les citations deviennent le résultat d’un outil. xAI exécute `web_search` avec `grok-4.6` par défaut et ajoute
    `x_search` à la même requête lorsque `xSearch.enabled` vaut true.
@@ -93,9 +93,9 @@ modèle couvert par le sidecar. Les combos annoncent l'entrée image seulement l
 nativement ou via un sidecar, et que le paramètre `imageInput` du combo n'est pas désactivé, afin que des clients comme
 l'application Codex autorisent les pièces jointes au lieu de les bloquer avant l'exécution du sidecar. Lorsque
 `visionSidecar.model` est absent ou vide, le chemin d'exécution OpenAI, le tableau de bord et l'API de gestion
-utilisent le modèle de repli `gpt-5.6-luna`. Au démarrage, une ancienne valeur `gpt-5.6-luna` explicitement enregistrée
-est toujours migrée vers `gpt-5.6-luna` ; cette migration s'applique à une valeur stockée, et non à l'absence du
-champ du modèle.
+utilisent le modèle de repli `gpt-6-luna`. Au démarrage, les valeurs `gpt-5.4-mini` et `gpt-5.6-luna` explicitement
+enregistrées sont migrées vers `gpt-6-luna` ; cette migration s'applique aux valeurs stockées, et non à l'absence
+du champ du modèle.
 
 - Les images peuvent provenir de messages utilisateur, développeur et de résultats d’outils, y compris de `view_image` dans Codex.
 - Sur le chemin OpenAI (ChatGPT-login passthrough), chaque image est envoyée au modèle de vision configuré
@@ -122,7 +122,7 @@ champ du modèle.
   mises en cache.
 
 L'API de gestion et le sélecteur du tableau de bord répertorient désormais les modèles qui peuvent réellement accepter des images.
-Lorsque le moteur correspondant est disponible, `gpt-5.6-luna` (OpenAI) et `claude-haiku-4-5` (Anthropic)
+Lorsque le moteur correspondant est disponible, `gpt-6-luna` (OpenAI) et `claude-haiku-4-5` (Anthropic)
 sont toujours proposés comme options de base. `PUT /api/sidecar-settings` rejette un modèle connu pour être
 texte uniquement, mais accepte toujours un identifiant inconnu afin que les noms personnalisés ou en avance sur le catalogue continuent de fonctionner.
 
@@ -131,7 +131,7 @@ texte uniquement, mais accepte toujours un identifiant inconnu afin que les noms
   "visionSidecar": {
     "enabled": true,
     "backend": "openai",
-    "model": "gpt-5.6-luna",
+    "model": "gpt-6-luna",
     "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000

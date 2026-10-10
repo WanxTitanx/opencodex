@@ -53,7 +53,7 @@ const DEFAULTS = {
   failureBackoffBaseSeconds: 300,
   failureBackoffMaxSeconds: 3600,
   codexWarmupMaxAgeSeconds: 691_200, // 8d — matches Codex managed-auth last_refresh cadence.
-  codexWarmupModel: "gpt-5.6-luna",
+  codexWarmupModel: "gpt-6-luna",
 };
 
 interface BackoffEntry {

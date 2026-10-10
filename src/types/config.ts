@@ -1521,7 +1521,7 @@ export interface OcxTokenGuardianConfig {
   codexWarmupEnabled?: boolean;
   /** Max age before a Codex pool account is revalidated via `/codex/responses`. Default 691200 (8d). */
   codexWarmupMaxAgeSeconds?: number;
-  /** Model used for optional Codex pool warmup. Default gpt-5.6-luna. */
+  /** Model used for optional Codex pool warmup. Default gpt-6-luna. */
   codexWarmupModel?: string;
 }
 

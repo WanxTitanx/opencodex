@@ -35,7 +35,7 @@ opencodex 依此順序解析請求的模型：
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-6-luna" }
 }
 ```
 

@@ -447,13 +447,13 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
     shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
   const visionEnabled = sidecar?.vision?.enabled !== false;
-  const visionModel = visionEnabled ? (sidecar?.vision?.model ?? "gpt-5.6-luna") : "";
+  const visionModel = visionEnabled ? (sidecar?.vision?.model ?? "gpt-6-luna") : "";
   const visionBackend = sidecar?.vision.backend ?? visionModels.find(option => option.value === sidecar?.vision.model)?.backend;
   // Same derivation as Vision: a stored setting without a backend takes the picker option's backend.
   const webSearchBackend = sidecar?.webSearch.backend ?? sidecarModels.find(option => option.value === sidecar?.webSearch.model)?.backend;
   const webSearchEnabled = sidecar?.webSearch?.enabled !== false;
   // Same shape as the Vision card: Off is a row in the picker, and choosing a model is the way back.
-  const webSearchModel = webSearchEnabled ? (sidecar?.webSearch?.model ?? "gpt-5.6-luna") : "";
+  const webSearchModel = webSearchEnabled ? (sidecar?.webSearch?.model ?? "gpt-6-luna") : "";
   const persistedVisionReasoning = sidecar?.vision?.reasoning ?? "low";
   const visionLadder = visionReasoningLadder(models, visionModel);
   const visionReasoning = clampVisionReasoningToLadder(visionLadder, persistedVisionReasoning);

@@ -21,7 +21,7 @@ OAuth 账户时使用 `anthropic`，否则使用 `openai`。显式选择 `anthro
 1. **移除**托管的 `web_search` 工具，改为向路由模型提供一个合成的
    `web_search(query)` function 工具。原托管工具的选项会保留并用于 sidecar 调用。
 2. 让路由模型在一个小型 **agentic 循环**中运行。模型调用 `web_search` 时，opencodex 使用所选
-   后端：OpenAI 默认以 `gpt-5.6-luna` 运行托管 `web_search`；Anthropic 默认以
+   后端：OpenAI 默认以 `gpt-6-luna` 运行托管 `web_search`；Anthropic 默认以
    `claude-sonnet-5` 运行 `web_search_20250305`。xAI 默认以 `grok-4.6` 运行托管 `web_search`，
    并在 `xSearch.enabled` 为 true 时把 `x_search` 加入同一请求。Streaming 答案及引用会解析为工具结果。
 3. **循环**直到模型回答，或真实查询总数达到 `maxSearchesPerTurn`（默认 3）。达到上限后会移除
@@ -69,8 +69,8 @@ OAuth 账户时使用 `anthropic`，否则使用 `openai`。显式选择 `anthro
 如果没有可用 plan，原始图像会被移除，而不会继续转发给纯文本后端。模型目录会为每个由 sidecar 覆盖的模型声明图像输入。
 只有当每个 combo 成员都能原生或通过 sidecar 接受图像、且 combo 的 `imageInput` 设置未禁用时，combo 才会声明图像输入；
 这样 Codex 应用等客户端会允许附件，而不会在 sidecar 运行前阻止它们。当 `visionSidecar.model` 缺失或为空时，OpenAI 执行路径、
-Dashboard 和管理 API 都使用 `gpt-5.6-luna` 作为回退。启动时仍会把明确保存的旧
-`gpt-5.4-mini` 值迁移到 `gpt-5.6-luna`；该迁移只作用于已保存值，不适用于缺失的 model 字段。
+Dashboard 和管理 API 都使用 `gpt-6-luna` 作为回退。启动时仍会把明确保存的旧
+`gpt-5.4-mini` 值迁移到 `gpt-6-luna`；该迁移只作用于已保存值，不适用于缺失的 model 字段。
 
 - 图像可以来自 user、developer 和 tool-result message，也包括 Codex 的 `view_image` 结果。
 - OpenAI 路径（ChatGPT 登录透传）会通过 Responses 端点把每张图像发送给配置的视觉模型，并携带所选
@@ -98,7 +98,7 @@ Dashboard 和管理 API 都使用 `gpt-5.6-luna` 作为回退。启动时仍会�
   "visionSidecar": {
     "enabled": true,
     "backend": "openai",
-    "model": "gpt-5.6-luna",
+    "model": "gpt-6-luna",
     "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000

@@ -61,8 +61,8 @@ carry per-model capability fields taken from the effective metadata the proxy re
 `GET /api/models`. For example, the legacy block carries `attachment` and `modalities`:
 
 ```json
-"gpt-5.6-luna": {
-  "name": "gpt-5.6-luna (native)",
+"gpt-6-luna": {
+  "name": "gpt-6-luna (native)",
   "limit": { "context": 272000, "output": 128000 },
   "attachment": true,
   "modalities": { "input": ["text", "image"], "output": ["text"] }

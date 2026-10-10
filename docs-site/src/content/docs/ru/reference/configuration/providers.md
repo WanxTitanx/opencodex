@@ -350,7 +350,7 @@ Pool 2 читает настройки пула из собственной за
 | `failureBackoffMaxSeconds?` | `number` | `3600` | Верхний предел backoff'а и задержки после permanent-failure. |
 | `codexWarmupEnabled?` | `boolean` | `false` | Включить synthetic validation для аккаунтов пула Codex. |
 | `codexWarmupMaxAgeSeconds?` | `number` | `691200` | Повторно валидировать аккаунт через 8 дней. |
-| `codexWarmupModel?` | `string` | `gpt-5.6-luna` | Нативная модель, используемая для необязательного warmup'а. |
+| `codexWarmupModel?` | `string` | `gpt-6-luna` | Нативная модель, используемая для необязательного warmup'а. |
 
 ## Фиксированные endpoint'ы провайдеров
 

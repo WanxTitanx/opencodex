@@ -1,23 +1,19 @@
 /**
- * One-time migration off Codex-login models that upstream has retired.
+ * One-time migration of persisted Codex-login sidecar models to native GPT-6 Luna.
  *
- * Originally this only moved the two sidecar defaults, and it was written when
- * `gpt-5.4-mini` was merely superseded rather than withdrawn. Once OpenAI retired the
- * model the same stored value stopped being a stale preference and became a guaranteed
- * 404 on every web-search, vision and pool-warmup call, so the pool warmup slug joined
- * the set.
+ * The stored `gpt-5.4-mini` choice is retired upstream, and `gpt-5.6-luna` is now the
+ * previous default. Both move to `gpt-6-luna` for web-search, vision and pool warmup.
  *
- * The match is exact equality, which means an explicitly chosen `gpt-5.4-mini` is
- * rewritten too. That is deliberate: there is no configuration in which continuing to
- * send a withdrawn model is what the operator wanted. Any other value is left alone.
+ * The match is exact equality, so explicitly saved legacy choices are migrated too.
+ * Any other model value is left alone.
  */
 import type { OcxConfig } from "../types";
 
 /** July 9 21:00 UTC = KST July 10 06:00. */
 export const RETIRED_MODEL_MIGRATION_CUTOFF = Date.UTC(2026, 6, 9, 21, 0);
 
-const RETIRED_SIDECAR_MODEL = "gpt-5.4-mini";
-const REPLACEMENT_MODEL = "gpt-5.6-luna";
+const LEGACY_SIDECAR_MODELS = new Set(["gpt-5.4-mini", "gpt-5.6-luna"]);
+const REPLACEMENT_MODEL = "gpt-6-luna";
 
 /**
  * @returns true when the config changed and the caller should persist it.
@@ -25,15 +21,15 @@ const REPLACEMENT_MODEL = "gpt-5.6-luna";
 export function runRetiredCodexModelMigration(config: OcxConfig, now = Date.now()): boolean {
   if (now < RETIRED_MODEL_MIGRATION_CUTOFF) return false;
   let migrated = false;
-  if (config.webSearchSidecar?.model === RETIRED_SIDECAR_MODEL) {
+  if (config.webSearchSidecar && LEGACY_SIDECAR_MODELS.has(config.webSearchSidecar.model ?? "")) {
     config.webSearchSidecar = { ...config.webSearchSidecar, model: REPLACEMENT_MODEL };
     migrated = true;
   }
-  if (config.visionSidecar?.model === RETIRED_SIDECAR_MODEL) {
+  if (config.visionSidecar && LEGACY_SIDECAR_MODELS.has(config.visionSidecar.model ?? "")) {
     config.visionSidecar = { ...config.visionSidecar, model: REPLACEMENT_MODEL };
     migrated = true;
   }
-  if (config.tokenGuardian?.codexWarmupModel === RETIRED_SIDECAR_MODEL) {
+  if (config.tokenGuardian && LEGACY_SIDECAR_MODELS.has(config.tokenGuardian.codexWarmupModel ?? "")) {
     config.tokenGuardian = { ...config.tokenGuardian, codexWarmupModel: REPLACEMENT_MODEL };
     migrated = true;
   }

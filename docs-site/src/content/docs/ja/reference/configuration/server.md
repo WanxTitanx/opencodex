@@ -149,7 +149,7 @@ Codex は、タイトルやコミット メッセージなどのタスクに小�
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` |使用可能な場合はオン |マスタースイッチ。`false` のとき OpenCodex は `web_search` への介入をやめ、Codex 統合は `~/.codex/config.toml` に `web_search = "disabled"` を書き込みます。 |
 | `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | 明示設定が優先され、未設定なら常に `openai` です。`anthropic` と `xai` は明示設定時のみ実行され、`gemini` と `exa` は executor が提供されるまで予約値です。 |
-| `model?` | `string` |バックエンド依存 | OpenAI は `gpt-5.6-luna`、Anthropic は `claude-sonnet-5`、xAI は `grok-4.6`。従来の明示的な `gpt-5.4-mini` は開始時に移行されます。 |
+| `model?` | `string` |バックエンド依存 | OpenAI は `gpt-6-luna`、Anthropic は `claude-sonnet-5`、xAI は `grok-4.6`。従来の明示的な `gpt-5.4-mini` は開始時に移行されます。 |
 | `exaApiKey?` | `string` | なし | `exa` バックエンドのオペレーターキー。書き込み専用で、管理 API の読み取りでは保存値を返しません。 |
 | `xSearch?` | `object` | 省略 | xAI 専用の hosted `x_search` opt-in。`enabled`、相互排他的な `allowedXHandles` / `excludedXHandles` 配列（最大 20 件）、ISO の `fromDate` / `toDate`（`YYYY-MM-DD`）を指定します。 |
 | `reasoning?` | `string` | `low` |サイドカーの取り組み。 `minimal` は Web 検索で拒否されます。 |
@@ -167,7 +167,7 @@ OpenAI バックエンドには、ChatGPT ログインと有効な ChatGPT `forw
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` |使用可能な場合はオン |マスターイメージと説明のスイッチ。 |
 | `backend?` | `"openai" \| "anthropic"` |自動 | 明示的な値が優先されます。未設定の場合、使用可能な保存済み Anthropic OAuth 認証情報が優先され、それ以外は `openai` になります。 |
-| `model?` | `string` |バックエンド依存 | OpenAI の場合は `gpt-5.6-luna`、Anthropic の場合は `claude-sonnet-5`。 |
+| `model?` | `string` |バックエンド依存 | OpenAI の場合は `gpt-6-luna`、Anthropic の場合は `claude-sonnet-5`。 |
 | `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses の推論負荷。Anthropic は無視します。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` |新しい説明のキャッシュミスはメインターンごとに許可されます。 `0` は通話を無効にします。無効な値にはデフォルトが使用されます。 |
 | `timeoutMs?` | `number` | `45000` |サイドカーのフェッチタイムアウト。整数 1–2147483647。 |

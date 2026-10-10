@@ -96,7 +96,7 @@ Redirected routes record `blocked-model-redirect`; omitting the setting leaves r
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-6-luna" }
 }
 ```
 

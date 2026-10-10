@@ -23,7 +23,7 @@ Codex がパススルーでないルーティングモデルにホスト型 `web
 1. ホスト型 `web_search` ツールを**削除し**、ルーティングモデルには合成 `web_search(query)` 関数ツールを
    公開します。元のホスト型ツールのオプションはサイドカー呼び出しにそのまま使います。
 2. ルーティングモデルを小さな**エージェントループ**で実行します。モデルが `web_search` を呼ぶと選んだ
-   バックエンドを使います。OpenAI はデフォルト `gpt-5.6-luna` でホスト型 `web_search` を実行し、
+   バックエンドを使います。OpenAI はデフォルト `gpt-6-luna` でホスト型 `web_search` を実行し、
    Anthropic はデフォルト `claude-sonnet-5` で `web_search_20250305` を実行します。xAI はデフォルト
    `grok-4.6` で hosted `web_search` を実行し、`xSearch.enabled` が true の場合は同じリクエストに
    `x_search` を追加します。ストリーミング回答と引用をパースした結果をツール結果として返します。
@@ -76,8 +76,8 @@ stall は全体生成 timeout ではありません。SSE 開始前の失敗は 
 サイドカー対象の各モデルに画像入力を広告します。コンボは、すべてのメンバーがネイティブまたはサイドカーを
 通じて画像を受け入れ、かつコンボの `imageInput` 設定が無効でない場合にのみ画像入力を広告します。これにより
 Codex アプリなどのクライアントは、サイドカー実行前に添付をブロックせず許可できます。`visionSidecar.model` が未設定または空の場合、
-OpenAI 実行経路、ダッシュボード、管理 API は `gpt-5.6-luna` をフォールバックとして使います。起動時には
-明示的に保存された旧 `gpt-5.4-mini` 値を引き続き `gpt-5.6-luna` にマイグレーションしますが、この
+OpenAI 実行経路、ダッシュボード、管理 API は `gpt-6-luna` をフォールバックとして使います。起動時には
+明示的に保存された旧 `gpt-5.4-mini` 値を引き続き `gpt-6-luna` にマイグレーションしますが、この
 マイグレーションは保存済みの値だけが対象で、モデルフィールドがない場合には適用されません。
 
 - 画像はユーザー、developer、ツール結果メッセージから来ます。Codex の `view_image` 結果も
@@ -110,7 +110,7 @@ OpenAI 実行経路、ダッシュボード、管理 API は `gpt-5.6-luna` を�
   "visionSidecar": {
     "enabled": true,
     "backend": "openai",
-    "model": "gpt-5.6-luna",
+    "model": "gpt-6-luna",
     "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000

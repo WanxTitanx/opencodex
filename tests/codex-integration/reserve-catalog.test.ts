@@ -157,7 +157,7 @@ describe("Reserve catalog metadata is not permission", () => {
     const first = build();
     expect(first.map(row => row.slug)).toEqual(["personal/gpt-reserve", "external/model"]);
     const reserve = first[0]!;
-    expect(reserve[RESERVE_METADATA_SOURCE_FIELD]).toBe("gpt-5.6-luna");
+    expect(reserve[RESERVE_METADATA_SOURCE_FIELD]).toBe("gpt-6-luna");
     expect(reserve.supported_in_api).toBe(true);
     expect(reserve.available_in_plans).toBeUndefined();
     expect(reserve.supported_reasoning_levels).toEqual(luna().supported_reasoning_levels);
@@ -230,7 +230,8 @@ describe("Reserve catalog metadata is not permission", () => {
   });
 
   test("default multi-agent mode preserves the selected source; explicit overrides still apply", () => {
-    expect(merge(build()).find(isReserveCatalogProjection)?.multi_agent_version).toBe("v1");
+    // Haly: the Luna Reserve fallback follows GPT-6 Luna, whose row is multi-agent v2.
+    expect(merge(build()).find(isReserveCatalogProjection)?.multi_agent_version).toBe("v2");
     const disabled = actualReserve({ multi_agent_version: "disabled" });
     const rows = build(config(), [disabled], { multiAgentV2Enabled: true });
     expect(rows.find(isReserveCatalogProjection)?.multi_agent_version).toBe("disabled");

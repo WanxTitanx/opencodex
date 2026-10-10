@@ -197,7 +197,7 @@ Codex는 제목과 커밋 메시지 같은 작업에 작은 보조 모델을 사
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | 주 스위치입니다. `false`이면 OpenCodex는 `web_search` 가로채기를 멈추고 Codex 통합이 `~/.codex/config.toml`에 `web_search = "disabled"`를 씁니다. |
 | `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | 명시값이 우선입니다. 생략하면 항상 `openai`입니다. `anthropic`과 `xai`는 명시적으로 설정할 때만 실행되며, `gemini`와 `exa`는 executor가 제공될 때까지 예약 상태입니다. |
-| `model?` | `string` | backend-dependent | OpenAI는 `gpt-5.6-luna`, Anthropic은 `claude-sonnet-5`, xAI는 `grok-4.6`입니다. 레거시로 명시된 `gpt-5.4-mini`는 시작 시 마이그레이션됩니다. |
+| `model?` | `string` | backend-dependent | OpenAI는 `gpt-6-luna`, Anthropic은 `claude-sonnet-5`, xAI는 `grok-4.6`입니다. 레거시로 명시된 `gpt-5.4-mini`는 시작 시 마이그레이션됩니다. |
 | `exaApiKey?` | `string` | 없음 | `exa` 백엔드용 운영자 키입니다. 쓰기 전용이며 관리 API 조회에서는 저장된 값을 반환하지 않습니다. |
 | `xSearch?` | `object` | 생략 | xAI 전용 `x_search` opt-in입니다. `enabled`, 서로 배타적인 `allowedXHandles` / `excludedXHandles` 배열(최대 20개), ISO `fromDate` / `toDate`(`YYYY-MM-DD`)를 지원합니다. |
 | `reasoning?` | `string` | `low` | 사이드카 노력 수준입니다. `minimal`은 web search와 함께 거부됩니다. |
@@ -215,7 +215,7 @@ OpenAI 백엔드는 ChatGPT 로그인과 활성화된 ChatGPT `forward` provider
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | 주 이미지 설명 스위치입니다. |
 | `backend?` | `"openai" \| "anthropic"` | auto | 명시값이 우선하며, 미설정 시 사용 가능한 저장된 Anthropic OAuth 자격 증명을 우선하고 없으면 `openai`를 사용합니다. |
-| `model?` | `string` | backend-dependent | OpenAI는 `gpt-5.6-luna`, Anthropic은 `claude-sonnet-5`입니다. |
+| `model?` | `string` | backend-dependent | OpenAI는 `gpt-6-luna`, Anthropic은 `claude-sonnet-5`입니다. |
 | `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses 추론 강도입니다. Anthropic은 무시합니다. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 메인 턴당 허용되는 새 설명 캐시 미스 수입니다. `0`이면 호출이 비활성화되며, 잘못된 값은 기본값을 사용합니다. |
 | `timeoutMs?` | `number` | `45000` | 사이드카 fetch 제한 시간입니다. 정수 1–2147483647. |

@@ -24,7 +24,7 @@ Codex가 패스스루가 아닌 라우팅 모델에 호스팅 `web_search`를 �
 1. 호스팅 `web_search` 도구를 **제거하고** 라우팅 모델에는 합성 `web_search(query)` 함수 도구를
    노출합니다. 원래 호스팅 도구의 옵션은 사이드카 호출에 그대로 사용합니다.
 2. 라우팅 모델을 작은 **에이전트 루프**에서 실행합니다. 모델이 `web_search`를 호출하면 선택한
-   백엔드를 사용합니다. OpenAI는 기본 `gpt-5.6-luna`로 호스팅 `web_search`를 실행하고,
+   백엔드를 사용합니다. OpenAI는 기본 `gpt-6-luna`로 호스팅 `web_search`를 실행하고,
    Anthropic은 기본 `claude-sonnet-5`로 `web_search_20250305`를 실행합니다. xAI는 기본
    `grok-4.6`으로 호스팅 `web_search`를 실행하고, `xSearch.enabled`가 true이면 같은 요청에
    `x_search`를 추가합니다. 스트리밍 답변과 인용을 파싱한 결과는 도구 결과로 돌려줍니다.
@@ -78,8 +78,8 @@ stall은 전체 생성 timeout이 아닙니다. SSE가 시작되기 전 실패�
 콤보는 모든 멤버가 네이티브로 또는 사이드카를 통해 이미지를 수용하고 콤보의 `imageInput` 설정이 비활성화되지 않은
 경우에만 image input을 알립니다. 따라서 Codex 앱 같은 클라이언트는 사이드카가 실행되기 전에 첨부를 차단하지 않고 허용합니다.
 `visionSidecar.model`이 없거나 빈 값이면
-OpenAI 실행 경로, Dashboard, 관리 API는 `gpt-5.6-luna`를 폴백으로 사용합니다. 시작 시 명시적으로
-저장된 기존 `gpt-5.4-mini` 값은 계속 `gpt-5.6-luna`로 마이그레이션되지만, 이 마이그레이션은 저장된
+OpenAI 실행 경로, Dashboard, 관리 API는 `gpt-6-luna`를 폴백으로 사용합니다. 시작 시 명시적으로
+저장된 기존 `gpt-5.4-mini` 값은 계속 `gpt-6-luna`로 마이그레이션되지만, 이 마이그레이션은 저장된
 값에만 적용되고 모델 필드가 없는 경우에는 적용되지 않습니다.
 
 - 이미지는 사용자, developer, 도구 결과 메시지에서 올 수 있습니다. Codex의 `view_image` 결과도
@@ -112,7 +112,7 @@ OpenAI 실행 경로, Dashboard, 관리 API는 `gpt-5.6-luna`를 폴백으로 �
   "visionSidecar": {
     "enabled": true,
     "backend": "openai",
-    "model": "gpt-5.6-luna",
+    "model": "gpt-6-luna",
     "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000

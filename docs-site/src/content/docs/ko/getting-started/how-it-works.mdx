@@ -95,7 +95,7 @@ reasoning effort를 알려 줍니다. v2 요청은 Codex가 제공하는 멀티 
 
 6. **Web-search sidecar(선택)** — Codex가 호스팅 `web_search`를 활성화했지만 라우팅된 모델이
    OpenAI가 아닌 경우, opencodex는 합성 `web_search` function tool을 노출하고 모델을 작은
-   에이전트 루프로 실행하면서, 기본값인 `gpt-5.6-luna`를 ChatGPT 로그인으로 호출해 실제 검색을 수행하고
+   에이전트 루프로 실행하면서, 기본값인 `gpt-6-luna`를 ChatGPT 로그인으로 호출해 실제 검색을 수행하고
    그 결과를 tool result로 다시 주입합니다.
 
 7. **Compact(요청 시)** — Codex v1은 `POST /v1/responses/compact`를 호출하고, v2는 Responses

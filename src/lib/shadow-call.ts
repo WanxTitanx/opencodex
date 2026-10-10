@@ -14,7 +14,7 @@ export const DEFAULT_SHADOW_SOURCE_MODELS = ["gpt-6-luna", "gpt-5.6-luna"] as co
 
 /**
  * Optional blocked model redirects at the shared routing layer.
- * When `blockedModelRedirects` is configured (e.g. `{ "gpt-5.6-terra": "gpt-5.6-luna" }`),
+ * When `blockedModelRedirects` is configured (e.g. `{ "gpt-5.6-terra": "gpt-6-luna" }`),
  * requests targeting those models are rewritten to the substitute model with
  * routeReason "blocked-model-redirect".
  * Returns undefined when not configured or the model is not in the redirect map.

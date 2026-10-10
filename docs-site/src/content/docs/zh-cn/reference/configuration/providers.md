@@ -333,7 +333,7 @@ Pool 2 账户只能通过浏览器 OAuth 添加。与 `anthropic` 不同，Pool 
 | `failureBackoffMaxSeconds?` | `number` | `3600` | 退避上限和永久故障延迟。 |
 | `codexWarmupEnabled?` | `boolean` | `false` | 启用合成的 Codex 池账户验证。 |
 | `codexWarmupMaxAgeSeconds?` | `number` | `691200` | 8 天后重新验证账户。 |
-| `codexWarmupModel?` | `string` | `gpt-5.6-luna` | 用于可选预热的原生模型。 |
+| `codexWarmupModel?` | `string` | `gpt-6-luna` | 用于可选预热的原生模型。 |
 
 ## 固定提供者端点
 

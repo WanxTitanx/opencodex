@@ -838,7 +838,7 @@ export interface PassthroughWebSearchBridgeExecutorContext {
   sidecar?: Pick<OcxWebSearchSidecarConfig, "backend" | "model" | "reasoning" | "xSearch">;
 }
 
-const DEFAULT_OPENAI_BRIDGE_MODEL = "gpt-5.6-luna";
+const DEFAULT_OPENAI_BRIDGE_MODEL = "gpt-6-luna";
 const DEFAULT_ANTHROPIC_BRIDGE_MODEL = "claude-sonnet-5";
 const DEFAULT_XAI_BRIDGE_MODEL = "grok-4.6";
 const DEFAULT_GEMINI_BRIDGE_MODEL = "gemini-3.8-flash";
@@ -864,7 +864,7 @@ const DEFAULT_BRIDGE_MODELS: Record<ProviderWebSearchBridgeBackend, string> = {
  * `sidecar` is the GLOBAL `config.webSearchSidecar` block, which carries the model chosen for
  * ITS backend. The bridge backend is the per-provider `webSearchBridge.backend` and the two are
  * configured independently, so the operator's model only means anything here when they agree:
- * a global {backend:"openai", model:"gpt-5.6-luna"} otherwise reaches runAnthropicWebSearch and
+ * a global {backend:"openai", model:"gpt-6-luna"} otherwise reaches runAnthropicWebSearch and
  * Anthropic rejects the model. On a mismatch the bridge falls back to the backend's own default.
  * The same reasoning already pins the backend first in planWebSearch.
  *

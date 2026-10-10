@@ -72,7 +72,7 @@ describe("sidecar-settings vision model filter", () => {
     isolatedHome = undefined;
   });
 
-  test("1. GET returns the allowed list containing gpt-5.6-luna", async () => {
+  test("1. GET returns the allowed list containing gpt-6-luna", async () => {
     const config = emptyConfig();
     const response = await getSidecarSettings(config);
     expect(response.status).toBe(200);
@@ -81,7 +81,7 @@ describe("sidecar-settings vision model filter", () => {
     };
     expect(Array.isArray(body.visionModels)).toBe(true);
     expect(body.visionModels!.some(option => option.value === BASELINE_VISION_MODELS.openai)).toBe(true);
-    expect(body.visionModels!.some(option => option.value === "gpt-5.6-luna")).toBe(true);
+    expect(body.visionModels!.some(option => option.value === "gpt-6-luna")).toBe(true);
   });
 
   test("2. GET keeps a configured-but-ineligible model selectable", async () => {
@@ -100,7 +100,7 @@ describe("sidecar-settings vision model filter", () => {
 
   test("3. PUT rejects an ineligible model with 400 and does not persist", async () => {
     const config = emptyConfig({
-      visionSidecar: { model: "gpt-5.6-luna", reasoning: "low" },
+      visionSidecar: { model: "gpt-6-luna", reasoning: "low" },
     });
     const before = structuredClone(config.visionSidecar);
     const response = await putSidecarSettings(config, { model: "o3-mini" });
@@ -127,14 +127,14 @@ describe("sidecar-settings vision model filter", () => {
 
   test("5. PUT with model: \"\" still clears the override", async () => {
     const config = emptyConfig({
-      visionSidecar: { model: "gpt-5.6-luna", reasoning: "low" },
+      visionSidecar: { model: "gpt-6-luna", reasoning: "low" },
     });
     const response = await putSidecarSettings(config, { model: "" });
     expect(response.status).toBe(200);
     const body = await response.json() as { vision: { model: string } };
     // Empty string clears the override; the effective reported model is the fallback.
     expect(config.visionSidecar?.model).toBeUndefined();
-    expect(body.vision.model).toBe("gpt-5.6-luna");
+    expect(body.vision.model).toBe("gpt-6-luna");
   });
 
   test("6. catalog failure degrades to baselines", async () => {
@@ -186,7 +186,7 @@ describe("sidecar-settings vision model filter", () => {
   test("9. GET reports the effective Anthropic default for an explicitly selected backend", async () => {
     // Reports what the runtime WOULD use for this backend. No OAuth account is set up
     // here, so no plan would run; the point is that the projection stops answering
-    // gpt-5.6-luna for a configuration the OpenAI describer does not own.
+    // gpt-6-luna for a configuration the OpenAI describer does not own.
     const config = emptyConfig({ visionSidecar: { backend: "anthropic" } });
     const response = await getSidecarSettings(config);
     expect(response.status).toBe(200);
@@ -240,7 +240,7 @@ describe("sidecar-settings vision model filter", () => {
   test("11. PUT /api/claude-code rejects a provably blind vision override and accepts unknown", async () => {
     const rejectConfig = emptyConfig({
       claudeCode: {
-        visionSidecar: { model: "gpt-5.6-luna" },
+        visionSidecar: { model: "gpt-6-luna" },
       },
     });
     const before = structuredClone(rejectConfig.claudeCode);

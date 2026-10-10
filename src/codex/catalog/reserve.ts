@@ -1,13 +1,15 @@
 import type { OcxConfig } from "../../types";
 import { isEffectiveCodexDesktopAuthless } from "../loopback-target";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND } from "./account-models";
-import { NATIVE_RESERVE_MODEL } from "./native-models";
+import { NATIVE_GPT6_LUNA_MODEL, NATIVE_RESERVE_MODEL } from "./native-models";
 import type { RawEntry } from "./parsing";
 
 export const RESERVE_METADATA_SOURCE_FIELD = "opencodex_reserve_metadata_source";
 /** Validated genuine source metadata on the existing catalog, never an authorization. */
 export const RESERVE_SOURCE_CATALOG_FIELD = "opencodex_reserve_source";
-export const RESERVE_LUNA_METADATA_SOURCE = "gpt-5.6-luna";
+export const RESERVE_LUNA_METADATA_SOURCE = NATIVE_GPT6_LUNA_MODEL;
+/** Haly: catalogs persisted before the GPT-6 Luna switch still name the GPT-5.6 Luna pin. */
+const LEGACY_RESERVE_LUNA_METADATA_SOURCE = "gpt-5.6-luna";
 
 /** Metadata only: no process-local availability or credential state belongs in a catalog. */
 export interface ReserveCatalogProjection {
@@ -48,5 +50,6 @@ export function isReserveCatalogProjection(entry: RawEntry): boolean {
     && entry.slug.indexOf("/") === entry.slug.lastIndexOf("/")
     && entry.slug.endsWith(`/${NATIVE_RESERVE_MODEL}`)
     && (entry[RESERVE_METADATA_SOURCE_FIELD] === NATIVE_RESERVE_MODEL
-      || entry[RESERVE_METADATA_SOURCE_FIELD] === RESERVE_LUNA_METADATA_SOURCE);
+      || entry[RESERVE_METADATA_SOURCE_FIELD] === RESERVE_LUNA_METADATA_SOURCE
+      || entry[RESERVE_METADATA_SOURCE_FIELD] === LEGACY_RESERVE_LUNA_METADATA_SOURCE);
 }

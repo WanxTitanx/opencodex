@@ -50,7 +50,7 @@ function emptyConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
 
 const FULL_VISION = {
   enabled: true,
-  model: "gpt-5.6-luna",
+  model: "gpt-6-luna",
   backend: "openai" as const,
   reasoning: "medium" as const,
   maxDescriptionsPerTurn: 6,
@@ -86,7 +86,7 @@ describe("sidecar-settings remaining vision controls", () => {
     expect(unset.status).toBe(200);
     expect((await unset.json() as { vision: Record<string, unknown> }).vision).toMatchObject({
       enabled: true,
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       reasoning: "low",
       maxDescriptionsPerTurn: resolveMaxDescriptionsPerTurn(undefined),
       timeoutMs: DEFAULT_VISION_TIMEOUT_MS,
@@ -97,7 +97,7 @@ describe("sidecar-settings remaining vision controls", () => {
     }));
     expect((await configured.json() as { vision: Record<string, unknown> }).vision).toMatchObject({
       enabled: false,
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       backend: "openai",
       reasoning: "medium",
       maxDescriptionsPerTurn: 6,
@@ -113,7 +113,7 @@ describe("sidecar-settings remaining vision controls", () => {
     expect((await enabled.json() as { vision: { enabled: boolean } }).vision.enabled).toBe(false);
     expect(config.visionSidecar).toMatchObject({
       enabled: false,
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       backend: "openai",
       reasoning: "medium",
       maxDescriptionsPerTurn: 6,
@@ -139,7 +139,7 @@ describe("sidecar-settings remaining vision controls", () => {
     expect(response.status).toBe(200);
     expect(config.visionSidecar).toMatchObject({
       enabled: true,
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       backend: "openai",
       reasoning: "high",
       maxDescriptionsPerTurn: 6,
@@ -181,7 +181,7 @@ describe("sidecar-settings remaining vision controls", () => {
     expect(disabled.status).toBe(200);
     expect(config.visionSidecar).toMatchObject({
       enabled: false,
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       backend: "openai",
       reasoning: "medium",
       maxDescriptionsPerTurn: 6,
@@ -194,14 +194,14 @@ describe("sidecar-settings remaining vision controls", () => {
     // true is the default — drop the key so a disable/re-enable cycle does not rewrite the file.
     expect("enabled" in (config.visionSidecar ?? {})).toBe(false);
     expect(config.visionSidecar).toMatchObject({
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       backend: "openai",
       reasoning: "medium",
       maxDescriptionsPerTurn: 6,
       timeoutMs: 30_000,
     });
     expect(persistedVision()).toMatchObject({
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       backend: "openai",
       reasoning: "medium",
       maxDescriptionsPerTurn: 6,
@@ -212,7 +212,7 @@ describe("sidecar-settings remaining vision controls", () => {
   test("an unrelated web-search save does not overwrite Vision settings", async () => {
     const config = emptyConfig({
       visionSidecar: { ...FULL_VISION, enabled: false },
-      webSearchSidecar: { model: "gpt-5.6-luna" },
+      webSearchSidecar: { model: "gpt-6-luna" },
     });
     const response = await putSidecarSettings(config, {
       webSearch: { streamRoutedModelOutput: true },

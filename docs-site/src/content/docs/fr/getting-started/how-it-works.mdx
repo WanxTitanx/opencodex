@@ -82,7 +82,7 @@ le modèle et l’effort de raisonnement à utiliser. Les requêtes v2 conserven
 6. **Service auxiliaire de recherche web (facultatif)** — si Codex active l’outil hébergé `web_search` alors que
    le modèle routé n’est pas un modèle OpenAI, opencodex expose une fonction synthétique `web_search` et
    exécute le modèle dans une courte boucle agentique. Par défaut, les recherches réelles passent par
-   `gpt-5.6-luna` avec votre connexion ChatGPT, puis leurs résultats sont réinjectés comme résultats d’outil.
+   `gpt-6-luna` avec votre connexion ChatGPT, puis leurs résultats sont réinjectés comme résultats d’outil.
 
 7. **Compactage (sur demande)** — Codex v1 appelle `POST /v1/responses/compact` ; v2 ajoute un
    `compaction_trigger` à un tour de réponses. Le passthrough natif achemine le compactage en amont, tandis qu'un

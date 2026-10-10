@@ -57,7 +57,7 @@ const DEFAULT_BACKEND_MODELS = {
   xai: "grok-4.6",
   gemini: "gemini-3.8-flash",
   // Exa ignores model; the placeholder only satisfies SidecarSettings.
-  exa: "gpt-5.6-luna",
+  exa: "gpt-6-luna",
 } as const;
 
 export type AlphaSearchSidecarBackend = keyof typeof DEFAULT_BACKEND_MODELS;

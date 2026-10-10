@@ -113,10 +113,10 @@ test("effective preserved backend and model are validated before any field is mu
   expect((await request(config, "/api/sidecar-settings", { webSearch: { backend: "openai" }, vision: { enabled: false } })).status).toBe(400);
   expect(config).toEqual(before);
   expect(anthropicSidecarPatchError(config, { visionSidecar: { model: "anthropic/claude-sonnet-4-6" } })).toContain("conflicts");
-  expect(anthropicSidecarPatchError(config, { webSearchSidecar: { backend: "openai", model: "gpt-5.6-luna", anthropicInstance: null } })).toBeUndefined();
+  expect(anthropicSidecarPatchError(config, { webSearchSidecar: { backend: "openai", model: "gpt-6-luna", anthropicInstance: null } })).toBeUndefined();
   expect((await request(config, "/api/sidecar-settings", {
-    webSearch: { backend: "openai", model: "gpt-5.6-luna", anthropicInstance: null },
-    vision: { backend: "openai", model: "gpt-5.6-luna", anthropicInstance: null },
+    webSearch: { backend: "openai", model: "gpt-6-luna", anthropicInstance: null },
+    vision: { backend: "openai", model: "gpt-6-luna", anthropicInstance: null },
   })).status).toBe(200);
   expect(Object.hasOwn(persisted().webSearchSidecar!, "anthropicInstance")).toBe(false);
   expect(Object.hasOwn(persisted().visionSidecar!, "anthropicInstance")).toBe(false);
@@ -135,7 +135,7 @@ test("Claude overrides check an inherited global pool only while the merged back
   expect(anthropicSidecarPatchError(config, { visionSidecar: { model: "anthropic/claude-sonnet-4-6" } }, true)).toContain("conflicts");
   // Vice versa: a global OpenAI block accepts an override that selects Anthropic and a pool.
   const openai = anthropicInstanceConfig();
-  openai.webSearchSidecar = { backend: "openai", model: "gpt-5.6-luna" };
+  openai.webSearchSidecar = { backend: "openai", model: "gpt-6-luna" };
   expect(anthropicSidecarPatchError(openai, { webSearchSidecar: { backend: "anthropic", model: "claude-haiku-4-5", anthropicInstance: "anthropic2" } }, true)).toBeUndefined();
 });
 
@@ -144,8 +144,8 @@ test("untouched settings reads and unrelated saves retain instance absence and n
   const get = await (await request(config, "/api/sidecar-settings")).json() as {
     webSearch: Record<string, unknown>; vision: Record<string, unknown>;
   };
-  expect(get.webSearch.model).toBe("gpt-5.6-luna");
-  expect(get.vision.model).toBe("gpt-5.6-luna");
+  expect(get.webSearch.model).toBe("gpt-6-luna");
+  expect(get.vision.model).toBe("gpt-6-luna");
   expect(Object.hasOwn(get.webSearch, "anthropicInstance")).toBe(false);
   expect(Object.hasOwn(get.vision, "anthropicInstance")).toBe(false);
   expect((await request(config, "/api/sidecar-settings", { webSearch: { streamRoutedModelOutput: true } })).status).toBe(200);

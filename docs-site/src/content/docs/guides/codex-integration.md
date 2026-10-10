@@ -1040,7 +1040,7 @@ Catalog sync makes the selected sub-agent models available to Codex; see [Codex 
 
 ## Codex account warmup
 
-When a ChatGPT account is added or reauthenticated, OpenCodex normally verifies it before saving with a small streaming request to the Codex Responses backend. It waits for `response.completed`, defaults to `gpt-5.6-luna`, and retries with `gpt-5.5` on HTTP 400 or HTTP 404. Public errors contain fixed failure categories rather than raw upstream response bodies.
+When a ChatGPT account is added or reauthenticated, OpenCodex normally verifies it before saving with a small streaming request to the Codex Responses backend. It waits for `response.completed`, defaults to `gpt-6-luna`, and retries with `gpt-5.5` on HTTP 400 or HTTP 404. Public errors contain fixed failure categories rather than raw upstream response bodies.
 
 An HTTP 429 from an attempted warmup is reported as `codex_warmup_rate_limited`. Retry after the temporary restriction clears or the usage limit resets; signing in again does not reset these limits. A failed attempted warmup does not add a new account or replace existing credentials. This differs from quota-confirmed deferred registration below, which can save a restricted account without a model request. HTTP 401/403 failures retain the authentication guidance.
 

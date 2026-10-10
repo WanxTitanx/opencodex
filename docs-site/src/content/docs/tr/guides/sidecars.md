@@ -27,7 +27,7 @@ Codex, doğrudan geçiş olmayan bir yönlendirilmiş model için barındırıla
    barındırılan araç seçenekleri sidecar çağrısı için tutulur.
 2. Yönlendirilen modeli küçük bir **ajan döngüsünde** çalıştırır. Model
    `web_search`'i çağırdığında opencodex seçilen sidecar arka ucunu kullanır:
-   OpenAI varsayılan olarak `gpt-5.6-luna` ile barındırılan `web_search`'i
+   OpenAI varsayılan olarak `gpt-6-luna` ile barındırılan `web_search`'i
    çalıştırır; Anthropic varsayılan olarak `claude-sonnet-5` ile
    `web_search_20250305`'i çalıştırır. xAI varsayılan olarak `grok-4.6` ile hosted
    `web_search` çalıştırır ve `xSearch.enabled` true olduğunda aynı isteğe `x_search` ekler.
@@ -113,9 +113,9 @@ her üye görselleri yerel olarak veya bir sidecar üzerinden kabul ettiğinde v
 `imageInput` ayarı devre dışı olmadığında görsel girdisini bildirir; böylece Codex
 uygulaması gibi istemciler, sidecar çalışmadan önce ekleri engellemek yerine kabul eder.
 `visionSidecar.model` olmadığında veya boş
-olduğunda, OpenAI yürütme yolu, Kontrol Paneli ve yönetim API'si `gpt-5.6-luna`
+olduğunda, OpenAI yürütme yolu, Kontrol Paneli ve yönetim API'si `gpt-6-luna`
 geri dönüşünü kullanır. Başlangıç hala açıkça kalıcı hale getirilmiş eski bir
-`gpt-5.4-mini` değerini `gpt-5.6-luna`'ya geçirir; bu geçiş, bulunmayan bir
+`gpt-5.4-mini` değerini `gpt-6-luna`'ya geçirir; bu geçiş, bulunmayan bir
 model alanına değil, saklanan bir değere uygulanır.
 
 - Görseller, Codex'in `view_image`'ı da dahil olmak üzere kullanıcı, geliştirici
@@ -153,7 +153,7 @@ model alanına değil, saklanan bir değere uygulanır.
 
 Yönetim API'si ve Kontrol Paneli seçicisi artık gerçekten görsel girdisi kabul
 edebilen modelleri listeler. Eşleşen arka uç kullanılabilir olduğunda
-`gpt-5.6-luna` (OpenAI) ve `claude-haiku-4-5` (Anthropic) her zaman temel
+`gpt-6-luna` (OpenAI) ve `claude-haiku-4-5` (Anthropic) her zaman temel
 seçenekler olarak sunulur. `PUT /api/sidecar-settings`, salt metin olduğu
 bilinen bir modeli reddeder, ancak özel veya katalog öncesi adların çalışmaya
 devam etmesi için bilinmeyen bir kimliği yine de kabul eder.
@@ -163,7 +163,7 @@ devam etmesi için bilinmeyen bir kimliği yine de kabul eder.
   "visionSidecar": {
     "enabled": true,
     "backend": "openai",
-    "model": "gpt-5.6-luna",
+    "model": "gpt-6-luna",
     "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000

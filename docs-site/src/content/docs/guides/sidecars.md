@@ -37,7 +37,7 @@ When Codex requests hosted `web_search` for a non-passthrough routed model, open
 1. **Drops** the hosted `web_search` tool and exposes a synthetic `web_search(query)` function tool
    to the routed model instead. The original hosted-tool options are retained for the sidecar call.
 2. Runs the routed model in a small **agentic loop**. When it calls `web_search`, opencodex uses the
-   selected sidecar backend: OpenAI runs hosted `web_search` with `gpt-5.6-luna` by default;
+   selected sidecar backend: OpenAI runs hosted `web_search` with `gpt-6-luna` by default;
    Anthropic runs `web_search_20250305` with `claude-sonnet-5` by default. The streamed answer and
    citations become a tool result. xAI runs Grok hosted `web_search` with `grok-4.6` by default and,
    when enabled, adds hosted `x_search` to the same request.
@@ -145,9 +145,8 @@ Combos advertise image input only when every member accepts images, either nativ
 sidecar, and the combo's `imageInput` setting is not disabled, so clients such as the Codex app
 allow attachments instead of blocking them before the sidecar runs. When
 `visionSidecar.model` is absent or blank, the OpenAI execution path, Dashboard, and management API
-use the `gpt-5.6-luna` fallback. Startup still migrates an explicitly persisted legacy
-`gpt-5.4-mini` value to `gpt-5.6-luna`; that migration applies to a stored value, not to an absent
-model field.
+use the `gpt-6-luna` fallback. Startup migrates explicitly persisted `gpt-5.4-mini` and
+`gpt-5.6-luna` values to `gpt-6-luna`; this applies to stored values, not to an absent model field.
 The first-party DeepSeek `deepseek-flash` model is native multimodal (`text` and `image`) and does
 not use this sidecar by default. Explicit `noVisionModels` or text-only declarations remain
 authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash` remain
@@ -178,7 +177,7 @@ sidecar-backed by default; Zen routes are unchanged and were not probed in this 
   cached.
 
 The management API and Dashboard picker list models that can accept image input. When the matching
-backend is available, `gpt-5.6-luna` (OpenAI) and `claude-haiku-4-5` (Anthropic) are always offered
+backend is available, `gpt-6-luna` (OpenAI) and `claude-haiku-4-5` (Anthropic) are always offered
 as baseline options. `PUT /api/sidecar-settings` may retain an unknown custom/ahead-of-catalog id.
 An explicitly configured routed Vision Sidecar is therefore usable unless capability evidence proves
 that model cannot accept images; this preserves operator-selected custom sidecars without allowing a
@@ -189,7 +188,7 @@ known text-only sidecar to receive image bytes.
   "visionSidecar": {
     "enabled": true,
     "backend": "openai",
-    "model": "gpt-5.6-luna",
+    "model": "gpt-6-luna",
     "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000
