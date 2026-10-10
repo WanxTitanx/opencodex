@@ -268,7 +268,7 @@ describe("token guardian", () => {
 
     expect(res.refreshed).toEqual([]);
     expect(res.warmed).toContain("codex:acct-warm");
-    expect(mock.body()).toMatchObject({ model: "gpt-5.6-luna", input: WARMUP_INPUT, stream: true, store: false });
+    expect(mock.body()).toMatchObject({ model: "gpt-6-luna", input: WARMUP_INPUT, stream: true, store: false });
     expect(readCodexAccountRecord("acct-warm")?.lastCodexValidationStatus).toBe("ok");
     expect(readCodexAccountRecord("acct-warm")?.lastCodexValidatedAt).toBeGreaterThan(Date.now() - 30_000);
   });

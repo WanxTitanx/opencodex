@@ -94,7 +94,7 @@ describe("codex warmup improvements", () => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       parsedBodies.push(body);
 
-      if (body.model === "gpt-5.6-luna") {
+      if (body.model === "gpt-6-luna") {
         return new Response(JSON.stringify({ detail: "unknown model" }), { status: 400 });
       }
 
@@ -110,7 +110,7 @@ describe("codex warmup improvements", () => {
     }
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(parsedBodies.map(body => body.model)).toEqual(["gpt-5.6-luna", "gpt-5.5"]);
+    expect(parsedBodies.map(body => body.model)).toEqual(["gpt-6-luna", "gpt-5.5"]);
   });
   test("warmCodexAccount retries FALLBACK_MODELS on HTTP 404", async () => {
     const parsedBodies: Record<string, unknown>[] = [];
@@ -118,7 +118,7 @@ describe("codex warmup improvements", () => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       parsedBodies.push(body);
 
-      if (body.model === "gpt-5.6-luna") {
+      if (body.model === "gpt-6-luna") {
         return new Response(JSON.stringify({ detail: "model not found" }), { status: 404 });
       }
       if (body.model === "gpt-5.5") return sseResponse();
@@ -133,7 +133,7 @@ describe("codex warmup improvements", () => {
     }
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(parsedBodies.map(body => body.model)).toEqual(["gpt-5.6-luna", "gpt-5.5"]);
+    expect(parsedBodies.map(body => body.model)).toEqual(["gpt-6-luna", "gpt-5.5"]);
   });
 
   test("warmCodexAccount does not retry on 401 and immediately fails", async () => {

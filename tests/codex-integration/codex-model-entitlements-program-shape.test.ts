@@ -39,7 +39,8 @@ describe("Codex roster access program metadata", () => {
     const codexForward = deriveEntry(template, "openai/gpt-6-sol", "Codex forward", 5, {
       provider: "openai", id: "gpt-6-sol", codexForwardNativeCapabilityAlias: true,
     });
-    expect(codexForward).toHaveProperty("available_access_programs", { cyber: ["standard"] });
+    // Haly: the refreshed pinned gpt-6-sol row lists the daybreak_blue cyber program too.
+    expect(codexForward).toHaveProperty("available_access_programs", { cyber: ["standard", "daybreak_blue"] });
   });
   test("keeps access programs from each authenticated roster separate", async () => {
     const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {

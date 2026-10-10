@@ -11,7 +11,8 @@ describe("serialized Codex forward catalog", () => {
       codexForwardNativeCapabilityAlias: true,
     }]);
     const forward = fresh.find(row => row.slug === "openai/gpt-6-sol");
-    expect(forward?.available_access_programs).toEqual({ cyber: ["standard"] });
+    // Haly: the refreshed pinned gpt-6-sol row lists the daybreak_blue cyber program too.
+    expect(forward?.available_access_programs).toEqual({ cyber: ["standard", "daybreak_blue"] });
 
     const foreign = {
       ...structuredClone(forward),
@@ -24,7 +25,7 @@ describe("serialized Codex forward catalog", () => {
       models: Array<Record<string, unknown>>;
     };
     expect(serialized.models.find(row => row.slug === "openai/gpt-6-sol")?.available_access_programs)
-      .toEqual({ cyber: ["standard"] });
+      .toEqual({ cyber: ["standard", "daybreak_blue"] });
     expect(serialized.models.find(row => row.slug === "other/gpt-6-sol"))
       .not.toHaveProperty("available_access_programs");
   });

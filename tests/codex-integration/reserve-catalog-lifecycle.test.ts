@@ -182,7 +182,8 @@ describe("Reserve actual catalog finalization lifecycle", () => {
   test("default Luna v1 survives the actual write and repeated cache invalidation", () => {
     const sandbox = makeSandbox();
     const first = sync(sandbox);
-    expect(selected(first)).toMatchObject({ multi_agent_version: "v1", [MARKER]: "gpt-5.6-luna" });
+    // Haly: the default Luna Reserve follows GPT-6 Luna, whose row is multi-agent v2.
+    expect(selected(first)).toMatchObject({ multi_agent_version: "v2", [MARKER]: "gpt-6-luna" });
     expect(first[SOURCE]).toBeUndefined();
     expect(first.models?.some(row => row.slug === "external/model")).toBe(true);
     const second = sync(sandbox);
@@ -276,7 +277,7 @@ describe("Reserve actual catalog finalization lifecycle", () => {
     const adapted = { ...reserveRow(false, ["medium"]), [MARKER]: "gpt-5.6-luna" };
     const sandbox = makeSandbox([nativeRow()], { [SOURCE]: adapted });
     const result = sync(sandbox);
-    expect(selected(result)).toMatchObject({ multi_agent_version: "v1", [MARKER]: "gpt-5.6-luna" });
+    expect(selected(result)).toMatchObject({ multi_agent_version: "v2", [MARKER]: "gpt-6-luna" });
     expect(result[SOURCE]).toBeUndefined();
   }, budget(1));
 });
