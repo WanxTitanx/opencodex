@@ -15,6 +15,10 @@ localmente. O `package.json` segue a versão do OpenCodex que foi mesclada por �
 ## O que este branch mantém em cima do OpenCodex
 
 - Sidecar Headroom: compressão de contexto, página no dashboard, `/api/headroom`, ledger de economia e `ocx headroom`.
+  Se o Headroom falhar do lado dele (conexão recusada ou resetada, ou 429/5xx gerado por ele, sem `cf-ray`), o envio vai
+  direto ao provedor e o Headroom fica de fora por 30 s (`src/headroom/fallback.ts`). O serviço `headroom-proxy` roda com
+  `--no-rate-limit --no-http2`: sem o limite padrão de 60 req/min e 100 mil tokens/min, e sem a conexão HTTP/2
+  compartilhada com o chatgpt.com, que derrubava várias respostas de uma vez (StreamReset).
 - Chaves de API: cotas de gasto (24 h / 7 d / 30 d, reset por chave ou geral) e escopo de modelos.
 - Identidade Claude Code no OAuth da Anthropic (paridade com o `dario`): fingerprint de headers, body sintetizado no formato do CC, `metadata.user_id` da conta que serve a requisição, endpoint de token `platform.claude.com` e o conjunto de 6 scopes do login.
 - Identidade do Codex no refresh do ChatGPT (`originator`, `User-Agent` e `scope`).

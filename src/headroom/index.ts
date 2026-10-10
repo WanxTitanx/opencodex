@@ -11,12 +11,15 @@
  *
  * The redirect is fail-open: a cached `/livez` probe decides whether the sidecar
  * is up, and an unreachable Headroom leaves the request aimed at the provider
- * directly. Endpoint shapes Headroom cannot compress fall through untouched.
+ * directly. Endpoint shapes Headroom cannot compress fall through untouched. A send
+ * Headroom fails on its own side is resent directly and the sidecar is skipped for a
+ * cooldown (`./fallback.ts`).
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import type { AdapterRequest } from "../adapters/base";
 import type { OcxConfig } from "../types";
+import { headroomBypassedUntil, isHeadroomBypassed, rememberHeadroomBase, resetHeadroomFallbackForTests } from "./fallback";
 
 export const HEADROOM_DEFAULT_BASE_URL = "http://127.0.0.1:8787";
 const HEADROOM_PROBE_TTL_MS = 15_000;
@@ -179,6 +182,7 @@ export async function isHeadroomReachable(baseUrl: string): Promise<boolean> {
 export function resetHeadroomProbeForTests(): void {
   probeCache = undefined;
   probeInFlight = undefined;
+  resetHeadroomFallbackForTests();
 }
 
 const HEADROOM_SAVINGS_TTL_MS = 5_000;
@@ -333,7 +337,10 @@ export async function applyHeadroomRoute(request: AdapterRequest, config: Pick<O
   if (!headroom.enabled) return false;
   const route = headroomRouteForUpstream(request.url, headroom.baseUrl);
   if (!route) return false;
+  // A sidecar that just failed a send is skipped until its cooldown ends.
+  if (isHeadroomBypassed(headroom.baseUrl)) return false;
   if (!(await isHeadroomReachable(headroom.baseUrl))) return false;
+  rememberHeadroomBase(headroom.baseUrl);
   request.url = route.url;
   request.headers["x-headroom-base-url"] = route.upstreamBaseUrl;
   if (route.originalPath) request.headers["x-headroom-original-path"] = route.originalPath;
@@ -362,6 +369,8 @@ export async function headroomStatus(config: Pick<OcxConfig, "headroom">): Promi
   enabled: boolean;
   baseUrl: string;
   reachable: boolean;
+  /** ISO time until which requests skip a sidecar that failed a send; absent when not bypassed. */
+  bypassedUntil?: string;
   stats: unknown;
   savings: unknown;
 }> {
@@ -380,5 +389,13 @@ export async function headroomStatus(config: Pick<OcxConfig, "headroom">): Promi
   // The savings ledger is durable and file-based, so it is read even while the
   // sidecar itself is down.
   const savings = await headroomSavingsReport();
-  return { enabled: headroom.enabled, baseUrl: headroom.baseUrl, reachable, stats, savings };
+  const bypassed = headroomBypassedUntil(headroom.baseUrl);
+  return {
+    enabled: headroom.enabled,
+    baseUrl: headroom.baseUrl,
+    reachable,
+    ...(bypassed === undefined ? {} : { bypassedUntil: new Date(bypassed).toISOString() }),
+    stats,
+    savings,
+  };
 }

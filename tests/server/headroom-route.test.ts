@@ -13,6 +13,13 @@ import {
   resetHeadroomProbeForTests,
   setHeadroomSavingsRunnerForTests,
 } from "../../src/headroom";
+import {
+  directSendForHeadroom,
+  isHeadroomBypassed,
+  rememberHeadroomBase,
+  sendWithHeadroomFallback,
+} from "../../src/headroom/fallback";
+import { fetchWithHeaderTimeout, providerFetch } from "../../src/server/responses/fetch-helpers";
 
 const HEADROOM = "http://127.0.0.1:8787";
 
@@ -193,5 +200,165 @@ describe("headroomSavingsReport", () => {
       else process.env.HEADROOM_SAVINGS_EVENTS_PATH = prev;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Headroom send fallback", () => {
+  const BASE = "http://127.0.0.1:10010";
+  let server: Server | undefined;
+
+  beforeEach(() => { resetHeadroomProbeForTests(); rememberHeadroomBase(BASE); });
+  afterEach(() => { server?.stop(true); server = undefined; resetHeadroomProbeForTests(); });
+
+  type Seen = { url: string; headers: Headers; body: unknown };
+  const sender = (answer: (url: string) => Response | Promise<Response>) => {
+    const seen: Seen[] = [];
+    const send = async (input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      seen.push({ url, headers: new Headers(init?.headers), body: init?.body });
+      return answer(url);
+    };
+    return { seen, send };
+  };
+  const viaHeadroom = (extra: Record<string, string> = {}): RequestInit => ({
+    method: "POST",
+    headers: { authorization: "Bearer t", "x-headroom-base-url": "https://chatgpt.com", ...extra },
+    body: "{\"input\":[]}",
+  });
+  const providerOk = () => new Response("data: ok\n\n", { status: 200, headers: { "cf-ray": "abc-GRU" } });
+
+  test("rebuilds the provider URL for every route shape", () => {
+    const cases = [
+      "https://chatgpt.com/backend-api/codex/responses",
+      "https://chatgpt.com/backend-api/codex/responses?stream=1",
+      "https://api.openai.com/v1/responses?x=1",
+      "https://x.ai/v1/chat/completions",
+      "https://host.example/api/v1/chat/completions",
+      "https://api.anthropic.com/v1/messages",
+      "https://gw.example/anthropic/v1/messages?beta=true",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+      "https://gw.example/backend-api/codex/responses",
+    ];
+    for (const upstream of cases) {
+      const route = headroomRouteForUpstream(upstream, BASE)!;
+      const headers = new Headers({ authorization: "Bearer t", "x-headroom-base-url": route.upstreamBaseUrl });
+      if (route.originalPath) headers.set("x-headroom-original-path", route.originalPath);
+      const direct = directSendForHeadroom(route.url, headers);
+      expect(direct?.url).toBe(upstream);
+      expect(direct?.headers.get("x-headroom-base-url")).toBeNull();
+      expect(direct?.headers.get("x-headroom-original-path")).toBeNull();
+      expect(direct?.headers.get("authorization")).toBe("Bearer t");
+    }
+  });
+
+  test("leaves sends that did not go through Headroom alone", async () => {
+    const { seen, send } = sender(() => new Response("no", { status: 503 }));
+    const response = await sendWithHeadroomFallback(send, "https://chatgpt.com/backend-api/codex/responses", { method: "POST", body: "{}" });
+    expect(response.status).toBe(503);
+    expect(seen.map(s => s.url)).toEqual(["https://chatgpt.com/backend-api/codex/responses"]);
+    // A base URL nobody routed through is not Headroom either.
+    const other = sender(() => new Response("no", { status: 503 }));
+    await sendWithHeadroomFallback(other.send, "http://127.0.0.1:9999/backend-api/codex/responses", viaHeadroom());
+    expect(other.seen).toHaveLength(1);
+  });
+
+  test("passes a Headroom success through untouched", async () => {
+    const { seen, send } = sender(providerOk);
+    const response = await sendWithHeadroomFallback(send, `${BASE}/backend-api/codex/responses`, viaHeadroom());
+    expect(response.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(isHeadroomBypassed(BASE)).toBe(false);
+  });
+
+  test("resends directly when Headroom answers an error of its own, then skips it", async () => {
+    const { seen, send } = sender(url => url.startsWith(BASE) ? new Response("Service Unavailable", { status: 503 }) : providerOk());
+    const response = await sendWithHeadroomFallback(send, `${BASE}/backend-api/codex/responses`, viaHeadroom());
+    expect(response.status).toBe(200);
+    expect(seen.map(s => s.url)).toEqual([`${BASE}/backend-api/codex/responses`, "https://chatgpt.com/backend-api/codex/responses"]);
+    expect(seen[1]!.body).toBe("{\"input\":[]}");
+    expect(seen[1]!.headers.get("x-headroom-base-url")).toBeNull();
+    expect(seen[1]!.headers.get("authorization")).toBe("Bearer t");
+    expect(isHeadroomBypassed(BASE)).toBe(true);
+
+    // While bypassed, the next send skips Headroom entirely.
+    const next = sender(providerOk);
+    await sendWithHeadroomFallback(next.send, `${BASE}/backend-api/codex/responses`, viaHeadroom());
+    expect(next.seen.map(s => s.url)).toEqual(["https://chatgpt.com/backend-api/codex/responses"]);
+  });
+
+  test("treats Headroom's own rate limit and 502 as ours", async () => {
+    for (const status of [429, 500, 502, 504]) {
+      resetHeadroomProbeForTests();
+      rememberHeadroomBase(BASE);
+      const { seen, send } = sender(url => url.startsWith(BASE) ? Response.json({ detail: "Rate limited. Retry after 1.0s" }, { status }) : providerOk());
+      const response = await sendWithHeadroomFallback(send, `${BASE}/backend-api/codex/responses`, viaHeadroom());
+      expect(response.status).toBe(200);
+      expect(seen).toHaveLength(2);
+    }
+  });
+
+  test("relays provider errors that came through Headroom unchanged", async () => {
+    for (const headers of [{ "cf-ray": "abc-GRU" }, { "request-id": "req_1" }, { "x-codex-primary-used-percent": "100" }]) {
+      resetHeadroomProbeForTests();
+      rememberHeadroomBase(BASE);
+      const { seen, send } = sender(() => new Response("{\"error\":\"rate_limited\"}", { status: 429, headers }));
+      const response = await sendWithHeadroomFallback(send, `${BASE}/backend-api/codex/responses`, viaHeadroom());
+      expect(response.status).toBe(429);
+      expect(seen).toHaveLength(1);
+      expect(isHeadroomBypassed(BASE)).toBe(false);
+    }
+  });
+
+  test("resends directly when the connection to Headroom fails", async () => {
+    const { seen, send } = sender(url => {
+      if (url.startsWith(BASE)) throw Object.assign(new Error("Unable to connect. Is the computer able to access the url?"), { code: "ConnectionRefused" });
+      return providerOk();
+    });
+    const response = await sendWithHeadroomFallback(send, `${BASE}/v1/messages?beta=true`, viaHeadroom({ "x-headroom-base-url": "https://api.anthropic.com" }));
+    expect(response.status).toBe(200);
+    expect(seen.map(s => s.url)).toEqual([`${BASE}/v1/messages?beta=true`, "https://api.anthropic.com/v1/messages?beta=true"]);
+  });
+
+  test("never resends after the caller aborted", async () => {
+    const controller = new AbortController();
+    const { seen, send } = sender(() => { controller.abort(); throw new DOMException("aborted", "AbortError"); });
+    await expect(sendWithHeadroomFallback(send, `${BASE}/backend-api/codex/responses`, { ...viaHeadroom(), signal: controller.signal }))
+      .rejects.toThrow("aborted");
+    expect(seen).toHaveLength(1);
+    expect(isHeadroomBypassed(BASE)).toBe(false);
+  });
+
+  test("does not resend a body it cannot replay", async () => {
+    const { seen, send } = sender(() => new Response("no", { status: 503 }));
+    const body = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("{}")); c.close(); } });
+    const response = await sendWithHeadroomFallback(send, `${BASE}/backend-api/codex/responses`, { ...viaHeadroom(), body });
+    expect(response.status).toBe(503);
+    expect(seen).toHaveLength(1);
+  });
+
+  test("applyHeadroomRoute stops routing while Headroom is bypassed", async () => {
+    server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
+    const base = `http://127.0.0.1:${server.port}`;
+    const first = req("https://chatgpt.com/backend-api/codex/responses");
+    expect(await applyHeadroomRoute(first, cfg({ enabled: true, baseUrl: base }))).toBe(true);
+    const { send } = sender(url => url.startsWith(base) ? new Response("no", { status: 503 }) : providerOk());
+    await sendWithHeadroomFallback(send, first.url, { method: "POST", headers: first.headers, body: first.body });
+    expect(isHeadroomBypassed(base)).toBe(true);
+    const second = req("https://chatgpt.com/backend-api/codex/responses");
+    expect(await applyHeadroomRoute(second, cfg({ enabled: true, baseUrl: base }))).toBe(false);
+    expect(second.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+  });
+
+  test("the provider fetch boundary falls back without repeating its dispatch guard", async () => {
+    let guards = 0;
+    const { seen, send } = sender(url => url.startsWith(BASE) ? new Response("no", { status: 503 }) : providerOk());
+    const fetcher = providerFetch({ adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", fetch: send } as OcxProviderConfig & { fetch: typeof fetch }, undefined, {
+      httpOnly: true,
+      beforeDispatch: () => { guards += 1; },
+    });
+    const response = await fetchWithHeaderTimeout(`${BASE}/backend-api/codex/responses`, viaHeadroom(), new AbortController().signal, 5_000, true, fetcher);
+    expect(response.status).toBe(200);
+    expect(seen.map(s => s.url)).toEqual([`${BASE}/backend-api/codex/responses`, "https://chatgpt.com/backend-api/codex/responses"]);
+    expect(guards).toBe(1);
   });
 });

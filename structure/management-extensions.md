@@ -32,8 +32,13 @@ whose upstream path maps to a Headroom endpoint (`/v1/responses`, `/v1/chat/comp
 credentials flow inside the request and Headroom needs none of its own. A cached
 `/livez` probe keeps the redirect fail-open: an unreachable sidecar leaves the request
 aimed at the provider origin. Private/loopback upstreams and endpoint shapes Headroom
-cannot compress are never redirected. `/api/headroom` on the management plane exposes
-the toggle, base URL, liveness, the sidecar's own `/stats` metrics, and the durable
+cannot compress are never redirected. At send time `src/headroom/fallback.ts` wraps the
+physical dispatch in `providerFetch`, below the dispatch guard and attempt accounting: a
+refused or reset loopback connection, or an error status Headroom produced itself (no
+provider headers such as `cf-ray`, request ids or `x-codex-*`), resends the same request
+once directly to the provider and skips the sidecar for 30 s; provider errors relayed
+through Headroom pass unchanged. `/api/headroom` on the management plane exposes
+the toggle, base URL, liveness, any active bypass, the sidecar's own `/stats` metrics, and the durable
 savings ledger aggregated from `~/.headroom/savings_events.jsonl` — read in-process
 because the `headroom savings` CLI costs seconds per invocation while the dashboard
 polls.

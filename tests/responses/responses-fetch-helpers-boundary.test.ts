@@ -180,6 +180,8 @@ function expectRuntimeImportBoundary(source: string): string[] {
 describe("Responses fetch-helper import boundary", () => {
   test("loads only transport-owned runtime dependencies", () => {
     expect(expectRuntimeImportBoundary(readFileSync(helperPath, "utf8"))).toEqual([
+      // Haly: import-light Headroom send fallback (src/headroom/fallback.ts, depends only on lib/redact).
+      "../../headroom/fallback",
       "../../lib/provider-egress",
       "../../lib/provider-tls-profile",
       "../../lib/proxy-env",

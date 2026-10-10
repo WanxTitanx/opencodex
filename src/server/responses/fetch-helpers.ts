@@ -28,6 +28,7 @@ import {
   type ProviderEgressBinding,
 } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
+import { sendWithHeadroomFallback } from "../../headroom/fallback";
 
 export { withUpstreamHttpVersion };
 
@@ -284,9 +285,11 @@ export function providerFetch(
   // `provider.fetch ?? execute`, and `execute` is this wrapper. It still carries the binding, so
   // an override that simply calls it gets the route decided rather than dropped; an override
   // that decided for itself has already marked the init and this pass defers to that decision.
+  // A Headroom-routed send that Headroom fails on its own side is resent here, below the
+  // dispatch guard and attempt accounting, so the request still counts as one send.
   const dispatch = markEgressTransparentExecutor(Object.assign(
     (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
-      sendWithConnectionPolicy(transport, input, init, egressBinding),
+      sendWithHeadroomFallback((target, targetInit) => sendWithConnectionPolicy(transport, target, targetInit, egressBinding), input, init),
     { preconnect },
   ) as typeof globalThis.fetch);
   const httpFetch = Object.assign(
