@@ -337,9 +337,15 @@ export function tapAnthropicSseForLog(
       .map(l => sseFieldValue(l, "data"))
       .filter((v): v is string => v !== null)
       .join("");
-    if (!dataLine || (!dataLine.includes('"message_start"')
-      && !dataLine.includes('"message_delta"') && !dataLine.includes('"message_stop"')
-      && !dataLine.includes('"error"'))) return;
+    if (!dataLine) return;
+    if (!dataLine.includes('"message_start"') && !dataLine.includes('"message_delta"')
+      && !dataLine.includes('"message_stop"') && !dataLine.includes('"error"')) {
+      // Content frames only feed the generation window, which needs just the event type:
+      // record it without parsing the (potentially large) delta payload.
+      if (dataLine.includes('"content_block_delta"')) recordGenerationEvent(logCtx, "content_block_delta");
+      else if (dataLine.includes('"content_block_start"')) recordGenerationEvent(logCtx, "content_block_start");
+      return;
+    }
     let data: unknown;
     try { data = JSON.parse(dataLine); } catch { return; }
     if (!isRec(data)) return;
