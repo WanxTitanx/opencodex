@@ -129,9 +129,12 @@ function validPendingRotation(value: ApiKeyEntry["pendingRotation"] | unknown): 
 function validKeyRow(key: Partial<ApiKeyEntry> | null | undefined): boolean {
   if (!key) return false;
   if (!isApiKeyUsage(key.usage) || !validPendingRotation(key.pendingRotation)) return false;
-  // A malformed quota or spend object coerced to zeroes would read "unlimited"
-  // — the one claim a validator must never make about access control.
-  if (!isApiKeyQuota(key.quota) || !isApiKeySpend(key.spend)) return false;
+  // Quota telemetry is optional (an older or non-Haly server omits it, and the row
+  // then renders without spend). A present but malformed quota or spend object
+  // coerced to zeroes would read "unlimited" — the one claim a validator must
+  // never make about access control — so that alone is refused.
+  if ((key.quota !== undefined && !isApiKeyQuota(key.quota))
+    || (key.spend !== undefined && !isApiKeySpend(key.spend))) return false;
   if (!isApiKeyScopeList(key.allowedModels) || !isApiKeyScopeList(key.allowedProviders)) return false;
   if (key.quotaResetAt !== undefined
     && (typeof key.quotaResetAt !== "string" || Number.isNaN(Date.parse(key.quotaResetAt)))) return false;

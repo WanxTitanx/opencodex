@@ -165,9 +165,9 @@ test("Remote offers Remote Workspace only while it is available; Connect has no 
   const remote = NAV_GROUPS.find(group => group.id === "remote")!;
   expect(visibleGroupPages(remote, { remoteWorkspaceAvailable: false })).toEqual(["remote"]);
   expect(visibleGroupPages(remote, { remoteWorkspaceAvailable: true })).toEqual(["remote", "remote-workspace"]);
-  // Claude is embedded in Connect, so Connect never has more than one switcher member.
+  // Claude is embedded in Connect; Haly adds the standalone API-key page beside Integrations.
   const connect = NAV_GROUPS.find(group => group.id === "connect")!;
-  expect(visibleGroupPages(connect, { remoteWorkspaceAvailable: true })).toEqual(["integrations"]);
+  expect(visibleGroupPages(connect, { remoteWorkspaceAvailable: true })).toEqual(["integrations", "api-keys"]);
   const usageLogs = NAV_GROUPS.find(group => group.id === "usage-logs")!;
   expect(visibleGroupPages(usageLogs, { remoteWorkspaceAvailable: false })[0]).toBe("usage");
 });

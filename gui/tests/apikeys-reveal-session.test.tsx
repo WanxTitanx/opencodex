@@ -511,7 +511,7 @@ for (const finish of ["commit", "abort"] as const) {
     expect(button("Abort rotation")).toBeUndefined();
     expect(signals[1]?.aborted).toBe(true);
     expect(signals[2]?.aborted).toBe(false);
-    const cached = readSessionListCacheEntry<{ keys: { pendingRotation?: unknown }[] }>("ocx.apikeys.list.v2:");
+    const cached = readSessionListCacheEntry<{ keys: { pendingRotation?: unknown }[] }>("ocx.apikeys.list.v3:");
     expect(cached?.data.keys[0]?.pendingRotation).toBeUndefined();
   });
 }
@@ -541,7 +541,7 @@ test("a delayed first create inventory cannot replace a newer create inventory",
   expect(container.textContent).toContain("second created");
   await act(async () => older.resolve(Response.json({ authMatrix, keys: [key, first] })));
   expect(container.textContent).toContain("second created");
-  const cached = readSessionListCacheEntry<{ keys: { name: string }[] }>("ocx.apikeys.list.v2:");
+  const cached = readSessionListCacheEntry<{ keys: { name: string }[] }>("ocx.apikeys.list.v3:");
   expect(cached?.data.keys.map(row => row.name)).toEqual(["alpha", "first created", "second created"]);
 });
 
