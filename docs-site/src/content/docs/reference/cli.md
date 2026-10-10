@@ -81,6 +81,14 @@ fallback, capability JSON, and provider-specific error handling retain their exi
 
 ## Command families
 
+### `ocx message`
+
+`ocx message sessions [--json]` discovers loaded local Codex sessions.
+`ocx message send (--thread <uuid> | --name <exact-name>) --stdin [--json]`
+submits one correlated peer message, without starting a daemon or resuming a thread.
+See [Local Codex Messaging](/reference/cli/messaging/) for sender context, kinds,
+the tested runtime and `not_sent`/`queued`/`unknown` receipts. No remote transport is included.
+
 ### `ocx provider`
 
 `ocx provider`, `ocx help provider`, `ocx provider help`, `ocx provider --help`, and
@@ -245,6 +253,8 @@ latter need a live target. Before live operations, run `ocx ready --json` and
 `ocx status --json`, inspect the target and `versionSkew.relation`, and resolve
 version mismatch. `unknown` does not confirm matching builds. Offline help,
 local configuration and local Lab inspection do not require startup.
+
+`ocx status --json` includes `cliCommand`: configured Desktop intent, the expected executable, observed PATH candidates, `pathFirst`, `desktopFirstOnPath`, issue codes, and `shellResolution: "unobserved"`. The human status report prints one command-selection line. `ocx doctor` adds an “ocx command selection” section: invalid, unsafe (`record-unsafe`) or enabled-pending records and missing/unusable Desktop targets fail the check, while disabled cleanup-pending records, PATH ordering conflicts and incomplete scans warn. `OCX_NO_DESKTOP_HANDOFF=1` suppresses package-launcher handoff for one invocation; it leaves the Desktop shim and PATH configuration in place. These read-only observations do not execute candidates, resolve parent-shell aliases/functions, or identify the proxy’s runtime owner. On Windows, package-launcher handoff is disabled; user `Path` order selects the Desktop `ocx.exe`. Status and doctor still read the record and report the first PATH candidate. A possible cmd current-directory candidate is reported separately from PATH order.
 
 Output flags are per command. `doctor` rejects `--json` with exit 2;
 [`v2` (family reference)](/reference/cli/agents/)

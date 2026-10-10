@@ -19,3 +19,21 @@ rows, and `src/server/index/scoped-catalog-filter.ts` applies the admitted key's
 `src/cli/headroom.ts` exposes the same status, statistics, and explicit settings mutations through `ocx headroom status`, `stats`, and `config`. Missing quota telemetry in older API-key rows keeps lifecycle actions available and is not rendered as zero spending.
 
 The eight sidebar groups remain owned by `gui/src/nav-groups.ts`. Connect includes the standalone API-key page; Usage & Logs includes Headroom. Legacy API-key hashes resolve to the dedicated page through `gui/src/app-routing.ts`.
+
+## Headroom compression sidecar
+
+Unlike the model-authority sidecars in [service and sidecars](ops/service-and-sidecars.md), `src/headroom/` is not a model authority but a local proxy
+(default `http://127.0.0.1:8787`) that compresses the serialized upstream request and
+forwards it itself. When `config.headroom.enabled` is set, each built `AdapterRequest`
+whose upstream path maps to a Headroom endpoint (`/v1/responses`, `/v1/chat/completions`,
+`/v1/messages`, the Gemini `/v1beta/models/*` generate routes, or a native
+`/backend-api/*` ChatGPT path) is re-pointed at the sidecar with
+`x-headroom-base-url`/`x-headroom-original-path` carrying the real destination, so
+credentials flow inside the request and Headroom needs none of its own. A cached
+`/livez` probe keeps the redirect fail-open: an unreachable sidecar leaves the request
+aimed at the provider origin. Private/loopback upstreams and endpoint shapes Headroom
+cannot compress are never redirected. `/api/headroom` on the management plane exposes
+the toggle, base URL, liveness, the sidecar's own `/stats` metrics, and the durable
+savings ledger aggregated from `~/.headroom/savings_events.jsonl` — read in-process
+because the `headroom savings` CLI costs seconds per invocation while the dashboard
+polls.

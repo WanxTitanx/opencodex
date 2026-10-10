@@ -18,6 +18,7 @@ import {
   type ApiKeyQuota,
   type ApiSurfacesInfo,
   type ModelTests,
+  type RevealKeyResult,
 } from "../../pages/api-keys-utils";
 import ApiKeyQuotaEditor from "./ApiKeyQuotaEditor";
 import ApiKeyModelAccessEditor from "./ApiKeyModelAccessEditor";
@@ -39,6 +40,7 @@ export interface ApiKeysWorkspaceProps {
   /** Management API origin the client-config panel fetches from. */
   apiBase: string;
   active?: boolean;
+  onPairingStart?: () => void;
   /** Dataset-level. Absent means nothing is attributable yet — a different
    *  statement from a key whose counters read zero. */
   attributionSince?: string;
@@ -81,6 +83,10 @@ export interface ApiKeysWorkspaceProps {
   onDismissNewKey: () => void;
   onCopyKey: () => void;
   onDelete: (id: string) => Promise<boolean>;
+  /** Full key for a click-to-reveal in the key table; absent hides the control.
+   *  The result discriminates a standing 403 refusal — the list answers it with
+   *  the pairing surface, not a retry hint — from a transient failure. */
+  onRevealKey?: (id: string) => Promise<RevealKeyResult>;
   onRename: (id: string, name: string) => Promise<boolean>;
   onUpdateQuota: (id: string, quota: ApiKeyQuota | null) => Promise<boolean>;
   onUpdateScope: (id: string, scope: { allowedModels: string[] | null; allowedProviders: string[] | null }) => Promise<boolean>;
@@ -103,6 +109,7 @@ export default function ApiKeysWorkspace({
   keys,
   apiBase,
   active = true,
+  onPairingStart,
   attributionSince,
   historyTruncated,
   usageMetadata,
@@ -138,6 +145,7 @@ export default function ApiKeysWorkspace({
   onDismissNewKey,
   onCopyKey,
   onDelete,
+  onRevealKey,
   onRename,
   onUpdateQuota,
   onUpdateScope,
@@ -562,8 +570,13 @@ export default function ApiKeysWorkspace({
                     attributionSince={attributionSince}
                     usageMetadata={usageMetadata}
                     localeTag={localeTag}
+                    apiBase={apiBase}
+                    active={active}
+                    onPairingStart={onPairingStart}
                     busy={mutationPending}
                     onResetAllQuotas={onResetAllQuotas}
+                    onDelete={onDelete}
+                    onReveal={onRevealKey}
                     onSelect={id => {
                       setSelectedId(id);
                       clearDeleteConfirm();

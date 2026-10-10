@@ -12,6 +12,7 @@ import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { transientSendCapFor } from "./request-send-budget";
+import { renewMainQuotaDispatchForAttempt } from "../../codex/main-account-cache";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
@@ -37,7 +38,7 @@ import {
   codexProbeLeaseId,
   codexProbeQuotaScope,
   codexTransientProbeGrant,
-  createCodexReserveDispatchGuard,
+  createCodexAuthDispatchGuard,
 } from "../../codex/auth-context";
 import {
   NamespaceToolCollisionError,
@@ -88,7 +89,6 @@ import {
   fetchWithHeaderTimeout,
   providerFetch,
   safeHostLabel,
-  storedPoolReplayDispatchNotifier,
 } from "./fetch-helpers";
 import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
 import { clientCancelledResponse } from "./core-errors";
@@ -165,6 +165,7 @@ import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset
 import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } from "../../lib/errors";
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
+import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 
 /** Prepares and recovers one native Responses exchange before client commitment. */
 export async function preparePassthroughExchange(
@@ -216,6 +217,7 @@ export async function preparePassthroughExchange(
     ResponsesSendBudget,
     | "remainingTransientSendBudget"
     | "noteTransientSends"
+    | "transientSendReporter"
     | "recoverySendAllowance"
     | "recoveryClassFor"
     | "sendBudgetExhausted"
@@ -225,6 +227,10 @@ export async function preparePassthroughExchange(
     | "pendingHopPermit"
     | "workflowRootId"
     | "sendsUsed"
+    | "targetSendsUsed"
+    | "initialSendAllowance"
+    | "noteInitialDispatch"
+    | "adapterSendBudget"
   >,
 ) {
   const { config, logCtx, options, req } = requestContext;
@@ -251,6 +257,7 @@ export async function preparePassthroughExchange(
   const {
     remainingTransientSendBudget,
     noteTransientSends,
+    transientSendReporter,
     recoverySendAllowance,
     recoveryClassFor,
     sendBudgetExhausted,
@@ -753,7 +760,7 @@ export async function preparePassthroughExchange(
     const transientSendPolicy = () => transientRetryPolicyFor(route.provider);
     const transientSendAttempts = (): number => transientSendCapFor(
       transientSendPolicy()?.attempts,
-      sendBudgetState.sendsUsed,
+      sendBudgetState.targetSendsUsed,
     );
     const configuredTransientSendBudgetExhausted = (): boolean =>
       transientSendPolicy() !== null && transientSendAttempts() === 0;
@@ -797,7 +804,13 @@ export async function preparePassthroughExchange(
      */
     const sendAmbiguousReplacement = (
       signal: AbortSignal = upstream.signal,
-    ): Promise<Response> => fetchWithHeaderTimeout(
+    ): Promise<Response> => {
+      if (admissionState.authCtx.kind === "main" && admissionState.authCtx.mainQuotaDispatch) {
+        admissionState.authCtx.mainQuotaDispatch = renewMainQuotaDispatchForAttempt(admissionState.authCtx.mainQuotaDispatch);
+      }
+      const report = transientSendReporter();
+      let started = false;
+      const run = () => fetchWithHeaderTimeout(
       request.url,
       applyUpstreamRecoveryInit({
         method: request.method,
@@ -818,7 +831,7 @@ export async function preparePassthroughExchange(
             throw new Error("Credential selection changed before pre-output stream recovery");
           }
           if (isCanonicalOpenAiForwardProvider(route.provider)) {
-            createCodexReserveDispatchGuard(
+            createCodexAuthDispatchGuard(
               admissionState.authCtx,
               options.codexAuthPolicy ?? config,
               route.modelId,
@@ -832,11 +845,17 @@ export async function preparePassthroughExchange(
           // Charged to the SAME request counter every other send goes through. The
           // replacement is bought here rather than by a nested retry helper, so there is
           // one charge for one send and no per-layer counter to reconcile.
-          noteTransientSends(1);
+          if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(safeHostLabel(request.url));
+          started = true;
         },
       }),
       route.provider.authMode === "forward",
     );
+      return (report.execute ? report.execute(run) : run()).finally(() => {
+        try { if (started) report(1); }
+        finally { report.close?.(); }
+      });
+    };
     /**
      * Refuse a built body that exceeds the operator's configured ceiling, before it is sent.
      *
@@ -894,7 +913,8 @@ export async function preparePassthroughExchange(
         releaseUpstreamHostAdmission(nativeHostState.lease);
         nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
-        return formatErrorResponse(429, "request_send_budget_exhausted", err.message);
+        return unboundPoolSpendRefusalResponse(logCtx)
+          ?? formatErrorResponse(429, "request_send_budget_exhausted", err.message);
       }
       const refusal = unwrapUpstreamRetryEvidenceError(err);
       // Pacing may outlive the selected account's admission. No fetch occurred, so do
@@ -958,6 +978,11 @@ export async function preparePassthroughExchange(
     };
     const initialBodyRefusal = refuseOversizedOutboundBody(request);
     if (initialBodyRefusal) return initialBodyRefusal;
+    // A combo-owned first send is settled by the physical-dispatch receipt unless spend
+    // enforcement is on, where the shared reporter already owns the permit lifecycle.
+    // Stable per request: the Combo booking (`reserveDispatch`) already started and froze the spend
+    // policy, so `spendEnforced` cannot change before dispatch even though no reporter starts it here.
+    const receiptMode = !sendBudgetState.adapterSendBudget?.spendEnforced && Boolean(options.comboInitialSend);
     try {
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
@@ -984,9 +1009,10 @@ export async function preparePassthroughExchange(
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
+              onPhysicalDispatch: receiptMode ? sendBudgetState.noteInitialDispatch : undefined,
               onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
               beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
-                ? createCodexReserveDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
+                ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
             }),
             route.provider.authMode === "forward")
             // Every real attempt response — including an intermediate 5xx the
@@ -994,7 +1020,10 @@ export async function preparePassthroughExchange(
             .then(adoptObservedResponse);
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url),
-          attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends,
+          attempts: sendBudgetState.initialSendAllowance(transientSendAttempts()),
+          // Reporter path: direct requests and enforced spend. Receipt-mode sends are settled
+          // by `onPhysicalDispatch`; a reporter as well would count them twice.
+          ...(receiptMode ? {} : { onSendsConsumed: transientSendReporter() }),
           claimAmbiguousResend: claimPreHeaderResend,
         },
       );
@@ -1092,13 +1121,13 @@ export async function preparePassthroughExchange(
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
                 beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
-                  ? createCodexReserveDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
+                  ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
               }),
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: allowance.attempts,
-            onSendsConsumed: noteTransientSends, claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: transientSendReporter(allowance.permit), claimAmbiguousResend: claimPreHeaderResend },
         );
       } catch (err) {
         return { failed: transportFailureResponse(err) };
@@ -1184,13 +1213,13 @@ export async function preparePassthroughExchange(
         // The replay-dispatched signal is what bounds the rest of this logical request, so it
         // has to describe a send that actually happened. fetchWithHeaderTimeout awaits pacing
         // admission BEFORE calling the executor, so signalling at the call site would spend the
-        // budget even when a rejected pacing wait means nothing reaches the network. Wrapping
-        // the executor moves the signal to the last moment before the send, where a throw from
-        // here on is a genuine transport attempt. The notifier is built once for the whole leg:
-        // it fires on the first dispatch, and a replacement is another send of the same replay
-        // rather than a second one to announce.
-        const oauthReplayExecutor = storedPoolReplayDispatchNotifier(
-          providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+        // budget even when a rejected pacing wait means nothing reaches the network. Signal
+        // only after the physical-dispatch policy check succeeds; a local refusal is no send.
+        // A replacement is another send of the same replay, rather than a second announcement.
+        const replayGuard = isCanonicalOpenAiForwardProvider(route.provider)
+          ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined;
+        let replayNotified = false;
+        const oauthReplayExecutor = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
             httpOnly: canonicalBufferedJson,
             nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
               && responseEffects.plaintextV2AgentMessageToolNames.size === 0
@@ -1199,11 +1228,14 @@ export async function preparePassthroughExchange(
             providerName: route.providerName,
             modelId: route.modelId,
             onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
-            beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
-              ? createCodexReserveDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
-          }),
-          codex401ReplayKind === "stored" ? options.onStoredPool401ReplayDispatched : undefined,
-        );
+            beforeDispatch: headers => {
+              replayGuard?.(headers);
+              if (codex401ReplayKind === "stored" && !replayNotified) {
+                replayNotified = true;
+                options.onStoredPool401ReplayDispatched?.();
+              }
+            },
+          });
         // Routed through the shared helper so an ambiguous reset on THIS leg answers with the
         // same refusal every other leg gives. A bare fetch here rejected instead, and the
         // caller's transport-failure path turns a rejection into a client-retryable 502 --
@@ -1228,7 +1260,7 @@ export async function preparePassthroughExchange(
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url),
             attempts: remainingTransientSendBudget(transientSendAttempts()),
-            onSendsConsumed: noteTransientSends, claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: transientSendReporter(), claimAmbiguousResend: claimPreHeaderResend },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -1351,13 +1383,13 @@ export async function preparePassthroughExchange(
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
                 beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
-                  ? createCodexReserveDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
+                  ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
               }),
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()),
-            onSendsConsumed: noteTransientSends, claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: transientSendReporter(), claimAmbiguousResend: claimPreHeaderResend },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -1486,13 +1518,13 @@ export async function preparePassthroughExchange(
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
                 beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
-                  ? createCodexReserveDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
+                  ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
               }),
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()),
-            onSendsConsumed: noteTransientSends, claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: transientSendReporter(), claimAmbiguousResend: claimPreHeaderResend },
         );
       } catch (err) {
         return transportFailureResponse(err);

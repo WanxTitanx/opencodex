@@ -1,4 +1,5 @@
 import type { KiroOAuthMetadata } from "../oauth/types";
+import type { NativeReasoningOwner } from "../responses/reasoning-replay-cache";
 import type { OcxTool, OcxToolChoice } from "./tools";
 import type { TierDecision, TierObservationContext } from "./provider";
 
@@ -57,6 +58,10 @@ export interface OcxParsedRequest {
   stream: boolean;
   options: OcxRequestOptions;
   _rawBody?: unknown;
+  /** Claude replay tags, retained only until each route binding verifies them. */
+  _nativeReasoningReplay?: ReadonlyMap<string, string>;
+  _nativeReasoningBoundOwner?: NativeReasoningOwner;
+  _nativeReasoningMint?: { owner?: NativeReasoningOwner };
   /**
    * The client's original Anthropic Messages body, stashed by the /v1/messages
    * translator before the Responses-shaped replay. The anthropic adapter's OAuth
