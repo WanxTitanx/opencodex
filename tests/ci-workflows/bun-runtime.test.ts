@@ -8,6 +8,7 @@ import { findPathBun } from "../../src/lib/bun-path-runtime.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
+import { trustedFixtureRoot } from "../helpers/trusted-fixture-root";
 
 // realpath the temp root: on macOS /var is a symlink to /private/var, so a path built
 // from mkdtemp compares unequal to the same path resolved through process.cwd().
@@ -25,7 +26,19 @@ afterEach(() => {
 });
 afterAll(() => {
   removeTreeWithRetry(tmp);
+  for (const root of trustedPathRoots) removeTreeWithRetry(root);
 });
+
+// findPathBun rejects a PATH candidate beneath any group/other-writable ancestor,
+// which includes the shared temp root on POSIX ("/tmp" is 1777). A fixture that is
+// supposed to exercise a *trusted* PATH dir therefore lives under a base whose
+// ancestry the helper has checked against the same rule (#7402).
+const trustedPathRoots: string[] = [];
+function trustedPathRoot(prefix: string): string {
+  const root = trustedFixtureRoot(prefix);
+  trustedPathRoots.push(root);
+  return root;
+}
 
 describe("isRealBunBinary (size gate vs placeholder stub)", () => {
   it("rejects the ~450-byte ASCII placeholder stub", () => {
@@ -55,7 +68,10 @@ describe("isRealBunBinary (size gate vs placeholder stub)", () => {
 describe("bundledBunPath / durableBunPath", () => {
   it("PATH-selected process provenance survives durable selection and project dotenv", () => {
     const root = join(tmp, "path-dotenv");
-    const pathDir = join(root, "path");
+    mkdirSync(root, { recursive: true });
+    // The PATH fixture needs trusted ancestors (see trustedPathRoot); everything
+    // else in this case (HOME, dotenv, consumer script) stays under tmp.
+    const pathDir = join(trustedPathRoot("path-dotenv-"), "path");
     mkdirSync(pathDir, { recursive: true });
     const bun = join(pathDir, process.platform === "win32" ? "bun.exe" : "bun");
     copyFileSync(process.execPath, bun);

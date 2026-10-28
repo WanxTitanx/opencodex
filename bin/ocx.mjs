@@ -37,8 +37,10 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
+import { scopeTranspilerCacheToRuntime } from "../src/lib/bun-transpiler-cache-scope.mjs";
 import { findDesktopCli, findPathBun } from "../src/lib/bun-path-runtime.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
+import { runNpmInstall } from "../src/update/npm-install.mjs";
 import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "../src/update/install-detection.mjs";
 import { HALY_LOCAL_BUILD_UPDATE_REFUSAL, isHalyLocalBuild } from "../src/update/haly-local-build.mjs";
@@ -56,12 +58,19 @@ import {
   runNpmCachePreflight,
 } from "../src/update/npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
-import { bootRestoreProbe, launcherUsableAfterNpmUpdate, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
+import { bootRestoreProbe, launcherUsableAfterNpmUpdate, transactionalNpmUpdate as transactionalNpmUpdateSync, transactionalNpmUpdateAsync } from "../src/update/transactional-install.mjs";
 import { manualUpdateFailureGuidance, npmUpdateFailureGuidance } from "../src/update/update-failure-guidance.mjs";
 import {
+  captureCodexCliTransportEnv,
+  CODEX_CLI_TRANSPORT_ENV_KEYS,
   CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
+  codexCliInspectionLookupSeeds,
   isCodexCliUpdateInspectionArgv,
 } from "../src/update/codex-cli-update-launch-policy.mjs";
+import {
+  freshServingPid, hasRestartableServiceManager, readParentPid, readServiceManagerPid, restartServiceManagerJob,
+  supervisionVerdict, unsettledManagerWarning, unsupervisedRuntimeWarning,
+} from "../src/update/supervised-recovery.mjs";
 
 const PKG = "@bitkyc08/opencodex";
 const UPDATE_RECOVERY_READY_MS = 30_000;
@@ -206,7 +215,7 @@ function runningPnpmShimPath() {
   return resolve(invoked);
 }
 
-function runPackageManagerSelfUpdate(manager) {
+async function runPackageManagerSelfUpdate(manager) {
   const current = currentPackageVersion();
   const tag = updateTag(current);
   let owner;
@@ -471,6 +480,7 @@ function runPackageManagerSelfUpdate(manager) {
     ? ownershipMutationLeaseChildEnvironment(process.env, delegatedOwnershipMutationToken)
     : unprivilegedOwnershipMutationEnvironment(process.env);
 
+  /** Returns true, false, or "vetoed" when another owner holds the runtime (not a failure). */
   function startProxyDirectly() {
     const supervision = observeSupervision();
     const plan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: false, supervision });
@@ -478,7 +488,7 @@ function runPackageManagerSelfUpdate(manager) {
       console.warn(supervision
         ? "OpenCodex Desktop supervises the proxy; no CLI runtime was restored."
         : plan.notice);
-      return false;
+      return "vetoed";
     }
     if (!postUpdateLauncherUsable || !existsSync(postUpdateLauncher)) {
       console.error("opencodex: cannot restart the proxy because the launcher is missing; reinstall opencodex manually.");
@@ -511,6 +521,50 @@ function runPackageManagerSelfUpdate(manager) {
     return false;
   }
 
+  // #7043: before any detached start, ask launchd/systemd to restart the job it already holds,
+  // and count it only when the serving proxy is that job (or its launcher's child). Returns
+  // "supervised", "failed", or "unsettled" when the manager may still finish the restart.
+  function restartThroughServiceManager() {
+    if (!hasRestartableServiceManager()) return "failed";
+    console.log("opencodex: asking the service manager to restart the background service.");
+    const before = readCurrentRuntimeTarget();
+    const staleRecordPid = before.kind === "target" ? before.target.pid : null;
+    const restarted = restartServiceManagerJob();
+    const unsettled = !restarted.ok && restarted.unsettled === true;
+    let verdict;
+    if (!restarted.ok && !unsettled) {
+      verdict = { kind: "failed", reason: restarted.reason };
+    } else {
+      let servingPid = null;
+      const deadline = Date.now() + UPDATE_RECOVERY_READY_MS;
+      while (servingPid === null && Date.now() < deadline) {
+        const current = readCurrentRuntimeTarget();
+        if (current.kind === "target" && current.target.port === bakePort
+          && freshServingPid(current.target.pid, staleRecordPid) !== null
+          && probeProxyLiveness(current.target.port, current.target.hostname ?? bakeHostname) === "live") {
+          servingPid = current.target.pid;
+        } else {
+          Atomics.wait(UPDATE_RECOVERY_SLEEP, 0, 0, UPDATE_RECOVERY_POLL_MS);
+        }
+      }
+      verdict = supervisionVerdict({ servingPid, managerPid: readServiceManagerPid(), parentPid: pid => readParentPid(pid) });
+    }
+    if (verdict.kind === "supervised") {
+      console.log(`opencodex: the proxy is healthy on port ${bakePort} under the service manager (pid ${verdict.managerPid}).`);
+      return "supervised";
+    }
+    if (unsettled) {
+      console.warn(unsettledManagerWarning(bakePort));
+      return "unsettled";
+    }
+    console.warn(`opencodex: the service manager did not recover a supervised proxy: ${verdict.reason}.`);
+    return "failed";
+  }
+
+  /**
+   * Returns "unsupervised" when only a detached fallback was attempted, or "unsettled" when the
+   * manager may still finish its restart; callers exit non-zero for both.
+   */
   function refreshBackgroundServiceOrStartDirect() {
     const mayRefresh = () => {
       const supervision = observeSupervision();
@@ -577,6 +631,10 @@ function runPackageManagerSelfUpdate(manager) {
             : nowOwned.notice ?? "opencodex: the background runtime is owned elsewhere; not starting a second proxy.");
           return;
         }
+        // #7043: the manager first. Only a proxy it owns counts as recovered.
+        const managed = restartThroughServiceManager();
+        if (managed === "supervised") return;
+        if (managed === "unsettled") return "unsettled";
         // Repair normally avoids elevation for a healthy registration, but a stale Windows
         // scheduler definition can require it. It can also fail — or exit 0 while leaving
         // a non-viable manager. Fall back to a direct detached proxy start so the
@@ -587,7 +645,11 @@ function runPackageManagerSelfUpdate(manager) {
             : "opencodex: service refresh failed — starting the proxy directly instead.",
         );
         console.warn("  Run 'ocx service repair' to see why the background service could not restart.");
-        startProxyDirectly();
+        const started = startProxyDirectly();
+        // An ownership veto is the correct outcome, not a degraded one.
+        if (started === "vetoed") return;
+        if (started) console.warn(unsupervisedRuntimeWarning(bakePort));
+        return "unsupervised";
       }
     } finally {
       if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
@@ -790,7 +852,8 @@ function runPackageManagerSelfUpdate(manager) {
     try {
       if (manager === "npm") {
         const packageDir = resolve(here, "..");
-        const tx = transactionalNpmUpdate({
+        const transactionalNpmUpdate = process.platform === "win32" ? transactionalNpmUpdateAsync : transactionalNpmUpdateSync;
+        const tx = await transactionalNpmUpdate({
           packageDir,
           pkgName: PKG,
           targetVersion: latest || undefined,
@@ -798,6 +861,9 @@ function runPackageManagerSelfUpdate(manager) {
           cachePath: npmCachePath,
           runNpm: (args) => {
             const invocation = npmInvocation(args);
+            if (process.platform === "win32") return runNpmInstall(invocation, {
+              env: unprivilegedOwnershipMutationEnvironment(invocation?.options?.env ?? process.env),
+            });
             if (!invocation) return { status: 1 };
             return spawnSync(invocation.file, invocation.args, {
               ...invocation.options,
@@ -896,7 +962,8 @@ function runPackageManagerSelfUpdate(manager) {
     // launcher so the new files write the baked paths and the service restarts.
     if (postInstallPlan.mayRestoreService) {
       console.log("Refreshing the background service with the updated files...");
-      refreshBackgroundServiceOrStartDirect();
+      const refreshed = refreshBackgroundServiceOrStartDirect();
+      if (refreshed === "unsupervised" || refreshed === "unsettled") process.exit(1);
     } else if (postInstallPlan.mayStopRuntime) {
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, bakePort)}`);
     }
@@ -946,6 +1013,15 @@ function findBunBinary(bunDir) {
   return null;
 }
 
+function bundledBunVersion(bunDir) {
+  try {
+    const version = JSON.parse(readFileSync(join(bunDir, "package.json"), "utf8")).version;
+    return typeof version === "string" ? version : null;
+  } catch {
+    return null;
+  }
+}
+
 function fail(msg) {
   const reinstall = installMethod === "pnpm"
     ? "pnpm add -g --allow-build=bun @bitkyc08/opencodex"
@@ -982,7 +1058,7 @@ function resolveBun({ allowInstall = true } = {}) {
   } catch { /* Missing dependency can still fall back to a validated PATH Bun. */ }
 
   let bin = bunDir ? findBunBinary(bunDir) : null;
-  if (bin) return { path: bin, source: "bundled" };
+  if (bin) return { path: bin, source: "bundled", version: bundledBunVersion(bunDir) };
 
   // Lazy fallback: --ignore-scripts (or a failed postinstall) leaves the
   // ~450-byte placeholder stub. Run the bun package's own installer once.
@@ -991,7 +1067,7 @@ function resolveBun({ allowInstall = true } = {}) {
     const r = spawnSync(process.execPath, [installJs], { stdio: "inherit" });
     if (r.status === 0) bin = findBunBinary(bunDir);
   }
-  if (bin) return { path: bin, source: "bundled" };
+  if (bin) return { path: bin, source: "bundled", version: bundledBunVersion(bunDir) };
 
   // Reached only when the bundled runtime is unusable. The two probes start the candidate Bun
   // cold, and on Windows a first run of a copied bun.exe is often held by an on-access scan for
@@ -999,7 +1075,7 @@ function resolveBun({ allowInstall = true } = {}) {
   const pathBun = findPathBun({ pinnedVersion: pinnedBunVersion(), deadlineMs: PATH_BUN_PROBE_BUDGET_MS });
   if (pathBun) {
     console.error(`opencodex: using PATH Bun ${pathBun.version}.`);
-    return { path: pathBun.path, source: "process" };
+    return { path: pathBun.path, source: "process", version: pathBun.version };
   }
   fail(bunDir ? "Bun binary missing after install attempt." : "the `bun` dependency is not installed.");
 }
@@ -1070,8 +1146,8 @@ if (process.argv[2] === "update" && isHalyLocalBuild(resolve(here, ".."))) {
 }
 
 if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstall()) {
-  if (installMethod === "npm") runNpmSelfUpdate();
-  if (installMethod === "pnpm") runPnpmSelfUpdate();
+  if (installMethod === "npm") await runNpmSelfUpdate();
+  if (installMethod === "pnpm") await runPnpmSelfUpdate();
 }
 
 // #1849 boot probe: a prior update that lost power (or double-faulted) mid-swap leaves a
@@ -1130,14 +1206,25 @@ function createNodeLaunchContext() {
     : configuredCodexCliPath;
   const preBunPath = typeof process.env.PATH === "string" ? process.env.PATH : null;
   const preBunPathExt = typeof process.env.PATHEXT === "string" ? process.env.PATHEXT : null;
+  // HOME and NODE_PATH seed the candidate Node module lookup the update
+  // inspection models, so they are proof-bound here for the same reason as
+  // PATH: the live environment could have been rewritten after selection. They
+  // stay in the inherited environment regardless — the child may need them for
+  // its own work; only the snapshot copy is optional.
+  const preBunHome = typeof process.env.HOME === "string" ? process.env.HOME : null;
+  const preBunNodePath = typeof process.env.NODE_PATH === "string" ? process.env.NODE_PATH : null;
   const preBunCodexCliManagerRoots = Object.fromEntries(
     CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS.flatMap(name => {
       const value = process.env[name];
       return typeof value === "string" && value !== "" ? [[name, value]] : [];
     }),
   );
+  // Proxy/CA settings are captured once, here, before Bun can add project dotenv
+  // values. They are part of the required selection snapshot, so they count
+  // against the context budget below before any optional lookup seed does.
+  const preBunTransportEnv = captureCodexCliTransportEnv(process.env);
   const launchProof = randomBytes(32).toString("base64url");
-  const launchContext = JSON.stringify({
+  const serializeContext = lookupSeeds => JSON.stringify({
     version: 1,
     proof: launchProof,
     anthropicEnvSlots: preBunAnthropicSlots,
@@ -1145,11 +1232,30 @@ function createNodeLaunchContext() {
       codexCliPath: preBunCodexCliPath,
       path: preBunPath,
       pathExt: preBunPathExt,
+      home: lookupSeeds.home,
+      nodePath: lookupSeeds.nodePath,
       managerRoots: preBunCodexCliManagerRoots,
+      transportEnv: preBunTransportEnv,
+      // The published Codex entrypoint selects its native backing by the arch of
+      // the Node that runs it; a Bun override or PATH fallback can run another
+      // arch under Rosetta, so this Node launcher's arch is the bound value.
+      arch: process.arch,
       configDir: configDir(),
     } : null,
   });
-  // The inspection snapshot above already carries PATH, PATHEXT, and the manager-root slots as
+  let launchContext = serializeContext({ home: preBunHome, nodePath: preBunNodePath });
+  // The lookup seeds are optional: a Windows inspection never models the global
+  // Node lookup, and an oversized NODE_PATH must not push the serialized
+  // context past the reader's limit — that would discard the whole selection
+  // snapshot, while dropped seeds merely leave the fallback lane unverifiable
+  // and fail only the content observation closed.
+  const lookupSeeds = codexCliInspectionLookupSeeds(
+    process.platform, preBunHome, preBunNodePath, launchContext.length,
+  );
+  if (lookupSeeds.home !== preBunHome || lookupSeeds.nodePath !== preBunNodePath) {
+    launchContext = serializeContext(lookupSeeds);
+  }
+  // The inspection snapshot above already carries PATH, PATHEXT, manager roots and proxy/CA settings as
   // proof-bound values, and `inspectCodexCliInstall` reads them from that snapshot rather than
   // from the live environment. Inheriting them again would spend the 32,767-character Windows
   // environment block twice, so a large-but-valid shell environment could stop the Bun child
@@ -1162,7 +1268,8 @@ function createNodeLaunchContext() {
   const inheritedEnv = { ...process.env };
   if (codexCliUpdateInspection) {
     const snapshotted = new Set(
-      ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase()),
+      ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
+        ...CODEX_CLI_TRANSPORT_ENV_KEYS].map(name => name.toLowerCase()),
     );
     for (const name of Object.keys(inheritedEnv)) {
       if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];
@@ -1178,7 +1285,8 @@ const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, 
   // the long-running Bun child, and closing that window kills the proxy (#1236).
   windowsHide: true,
   env: {
-    ...inheritedEnv,
+    // A cache shared with another Bun version (the CI test runner's) is evicted on every start.
+    ...scopeTranspilerCacheToRuntime(inheritedEnv, bunRuntime.version, join),
     [NODE_LAUNCH_CONTEXT_ENV]: launchContext,
     [BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source,
     [BUN_RUNTIME_PATH_ENV]: bunRuntime.path,

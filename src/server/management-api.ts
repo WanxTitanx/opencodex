@@ -54,11 +54,12 @@ import { noteExplicitShutdownRequested } from "./management/system-restart";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
 import type { PersistedUsageAttempt } from "../usage/log";
-import { isAllowedManagementOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
+import { inheritTrustedHubManagementRequest, isAllowedManagementOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
 import { applySystemEnvToggle } from "./system-env";
 
 import type { ManagementApiDeps } from "./management/context";
 import { handleConfigRoutes } from "./management/config-routes";
+import { handleNativeReasoningRetentionRoutes } from "./management/native-reasoning-retention-routes";
 import { handleLogsUsageRoutes } from "./management/logs-usage-routes";
 import { handleStorageLogGuardRoutes } from "./management/storage-log-guard-routes";
 import { handleRequestHistoryRoutes } from "./management/request-history-routes";
@@ -80,6 +81,9 @@ import { handleCodexPromptRoutes } from "./management/codex-prompt-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
 import { handleClaudeDesktopPickerRoutes } from "./management/claude-desktop-picker-routes";
+import { handleDesktopCompatibilityRoutes } from "./management/desktop-compatibility-routes";
+import { handleDesktopCompatibilityRuntimeRoutes } from "./management/desktop-compatibility-runtime-routes";
+import { handleDesktopCompatibilitySettingsRoutes } from "./management/desktop-compatibility-settings-routes";
 import { handleCursorIntegrationRoutes } from "./management/cursor-integration-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal, ManagementSessionControl } from "./management-auth";
@@ -156,6 +160,20 @@ async function handleLowQuotaRoutesOnDemand(ctx: ManagementContext): Promise<Res
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/codex-auth/low-quota-events", false)) return null;
   const { handleLowQuotaRoutes } = await import("./management/low-quota-routes");
   return handleLowQuotaRoutes(ctx);
+}
+
+/** Lazy for the same reason: the quota-pool assembler pulls every quota cache reader. */
+async function handleQuotaPoolRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/quota-pool", false)) return null;
+  const { handleQuotaPoolRoutes } = await import("./management/quota-pool-routes");
+  return handleQuotaPoolRoutes(ctx);
+}
+
+/** Lazy: the OCX-11 fallback state view and its write live off the dashboard's common path. */
+async function handleFallbackRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/fallback", false)) return null;
+  const { handleFallbackRoutes } = await import("./management/fallback-routes");
+  return handleFallbackRoutes(ctx);
 }
 
 /**
@@ -243,7 +261,9 @@ export async function handleManagementAPI(
     if (verified.status !== 200) {
       return jsonResponse({ error: "account switch body rejected" }, verified.status, req, config);
     }
+    const sourceReq = req;
     req = new Request(req.url, { method: req.method, headers: req.headers, body: Buffer.from(verified.body) });
+    inheritTrustedHubManagementRequest(sourceReq, req);
   }
   // Management bodies are small JSON (provider names, key ids, settings). Reject oversized
   // payloads before any handler buffers them — the data plane has its own decompression cap.
@@ -340,11 +360,14 @@ export async function handleManagementAPI(
     ??     (await handleLinkRoutesOnDemand(ctx))
     ??     (await handleRemoteWorkspaceRoutesOnDemand(ctx))
     ??     (await handleConfigRoutes(ctx))
+    ??     (await handleNativeReasoningRetentionRoutes(ctx))
     ??     (await handleStorageLogGuardRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleRequestHistoryRoutes(ctx))
     ??     (await handleQuotaResetRoutesOnDemand(ctx))
     ??     (await handleLowQuotaRoutesOnDemand(ctx))
+    ??     (await handleQuotaPoolRoutesOnDemand(ctx))
+    ??     (await handleFallbackRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleCodexAgentRoleRoutesOnDemand(ctx))
     ??     (await handleProtocolRoutesOnDemand(ctx))
@@ -360,6 +383,9 @@ export async function handleManagementAPI(
     ??     (await handleNativeIntegrationRoutes(ctx))
     ??     (await handleCursorIntegrationRoutes(ctx))
     ??     (await handleClaudeDesktopPickerRoutes(ctx))
+    ??     (await handleDesktopCompatibilityRoutes(ctx))
+    ??     (await handleDesktopCompatibilityRuntimeRoutes(ctx))
+    ??     (await handleDesktopCompatibilitySettingsRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleCodexPromptRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
@@ -387,6 +413,11 @@ export async function handleManagementAPI(
   }
   if (routed) return routed;
 
+  if (url.pathname === "/api/stop" && req.method === "GET") {
+    const response = jsonResponse((await import("./stop-teardown")).stopCapabilities(), 200, req, config);
+    response.headers.set("Cache-Control", "no-store");
+    return response;
+  }
   if (url.pathname === "/api/stop" && req.method === "POST") {
     const { installedServiceRespawnRisk, stopServiceIfInstalledDetailed, isServiceOwnershipError } = await import("../service");
     // `ocx stop` performs its own shared teardown AFTER verifying the scheduler did not
@@ -513,7 +544,7 @@ export async function handleManagementAPI(
       const { handleMainDeviceReauthAPI } = await import("../codex/main-device-reauth-api");
       return handleMainDeviceReauthAPI(req, url, config);
     }
-    const { handleCodexAuthAPI } = await import("../codex/auth-api");
+    const { handleCodexAuthAPI } = await import("../codex/auth-api/routes");
     const { ConfigMutationLockError } = await import("../config");
     const { CodexCredentialRefreshLockTimeoutError } = await import("../codex/account-store");
     try {

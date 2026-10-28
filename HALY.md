@@ -37,6 +37,15 @@ que esperam outro comportamento foram ajustados com comentários `Haly (dario pa
 - Thinking assinado nunca é reenviado no caminho sintetizado; `redacted_thinking` do cliente segue como veio, inclusive depois de troca de pool. Se aparecer 400 de `redacted_thinking` após failover, o ponto é `stripClaudeHistoryArtifacts` em `src/claude/cc-fingerprint.ts`.
 - Clientes Messages não-genuínos mantêm os nomes das próprias tools (sem prefixo `custom_`).
 - `release-version-line` falha neste fork: a versão é igual à da tag oficial e o commit não é o da tag. É esperado.
+- `tests/fixtures/file-size-baseline.json` registra `src/server/responses/adapter-dispatch.ts` e
+  `passthrough-dispatch.ts` acima de 2000 linhas: desde a 2.93 o upstream deixa os dois no limite, e os hooks do Haly
+  (Headroom e a recuperação de 400 do OAuth Claude) passam do teto. Ao mesclar, atualizar esses dois tetos com o tamanho novo.
+- `tests/fixtures/import-cycle-baseline.json` inclui `src/oauth/anthropic-model-cooldown.ts`: o cooldown por família lê a
+  cota em cache de `providers/quota`, que já está no ciclo de imports do upstream.
+- No caminho OAuth sintetizado, o thinking segue o template do CC: `display: "omitted"`, sem o beta
+  `thinking-display-updates` do Opus 5.5 (#7143), e as assinaturas que voltam no `reasoning_details` do Chat (#7469) não
+  são reenviadas. A troca de token do login Anthropic, inclusive no modo código (#7170), vai para `platform.claude.com`.
+  Os testes do upstream que esperam outra coisa foram ajustados com o mesmo comentário `Haly (dario parity)`.
 
 ## Atualizar para uma nova versão do OpenCodex
 

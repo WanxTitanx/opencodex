@@ -180,18 +180,22 @@ test("pending async choice holds pipelined bytes, then connects; rejection falls
   const echo = await startEchoUpstream();
   cleanups.push(echo.close);
   let settle!: (choice: { kind: "intercept"; port: number }) => void;
+  // Resolved inside selectTunnel itself: the proxy has parsed CONNECT and is now holding the
+  // pipelined bytes. A fixed sleep only guessed at that moment and called an unset settle when
+  // the proxy had not consulted the choice yet.
+  const consulted = Promise.withResolvers<void>();
   let dialCount = 0;
   const proxy = await startConnectProxy(0, {
     interceptPort: 1,
     authToken: AUTH_TOKEN,
     selectTunnel: host => host === "claude.ai"
-      ? new Promise(resolve => { settle = resolve; })
+      ? new Promise(resolve => { settle = resolve; consulted.resolve(); })
       : Promise.reject(new Error("decision failed")),
     dialUpstream: () => { dialCount += 1; return connect({ host: "127.0.0.1", port: echo.port }); },
   });
   cleanups.push(proxy.close);
   const delayed = tunnelPayload(proxy.port, "claude.ai", "pending");
-  await Bun.sleep(20);
+  await consulted.promise;
   expect(dialCount).toBe(0);
   settle({ kind: "intercept", port: echo.port });
   expect(await delayed).toContain("echo:pending");
@@ -293,6 +297,11 @@ test("malformed destination restrictions fail before a listener starts", () => {
 test("plain proxied HTTP, loopback targets and oversized heads are refused", async () => {
   const { proxy } = await startPair();
   expect(await rawRequest(proxy.port, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")).toStartWith("HTTP/1.1 405");
+  // The #6936 shape: loopback MCP over plain HTTP. The refusal names the NO_PROXY fix.
+  const mcp = await rawRequest(proxy.port, "POST http://127.0.0.1:3773/mcp HTTP/1.1\r\nHost: 127.0.0.1:3773\r\nContent-Length: 0\r\n\r\n");
+  expect(mcp).toStartWith("HTTP/1.1 405");
+  expect(mcp).toContain("Allow: CONNECT\r\n");
+  expect(mcp.slice(mcp.indexOf("\r\n\r\n") + 4)).toContain("NO_PROXY");
   expect(await rawRequest(proxy.port, `CONNECT 127.0.0.1:22 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 403");
   expect(await rawRequest(proxy.port, `CONNECT localhost:443 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 403");
   expect(await rawRequest(proxy.port, `CONNECT [::ffff:127.0.0.1]:22 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 403");

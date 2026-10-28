@@ -62,9 +62,11 @@ export type OAuthAccountRow = AccountQuotaReading & {
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
+  pauseDetails?: { reason: string; pausedAt: number };
   autoSwitchThresholdOverride?: number | null;
   autoSwitchThreshold?: number;
   effectiveAutoSwitchThreshold?: number;
+  plan?: string | null;
   health?: { status: OAuthAccountHealthStatus; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;
@@ -72,6 +74,8 @@ export type OAuthAccountRow = AccountQuotaReading & {
 };
 
 export type ApiKeyRow = AccountQuotaReading & {
+  disabled?: boolean;
+  pauseDetails?: { reason: string; pausedAt: number };
   id: string;
   label?: string;
   masked: string;
@@ -125,6 +129,7 @@ export type ProviderUpdatePatch = {
   note?: string;
   disabled?: boolean;
   allowPrivateNetwork?: boolean;
+  preserveResponsesReasoningContent?: boolean;
   liveModels?: boolean;
   upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2" | null;
   requestPacing?: WorkspaceItem["requestPacing"] | null;

@@ -20,10 +20,14 @@
  * targeting it is the caller's explicit act.
  */
 import { homedir } from "node:os";
+import { gentleShellPaths } from "./gentle-shell-path";
+import { absoluteClientPath, ClientPathError, piAgentDir } from "./client-path";
+export { ClientPathError, piAgentDir } from "./client-path";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
+import { fileIO } from "../integrations/config-io";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
 import { expandFastExportModels } from "./config-export/fast-models";
 import { probeHostname } from "../server/proxy-liveness";
@@ -81,6 +85,9 @@ import {
 
 export type { CommandCodeGeneratedConfig, CommandCodeModelEntry, CommandCodeProviderBlock };
 export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeContribution, commandCodeProviderRoot };
+import { agentConfigPath, buildQoderCnClientConfig, buildQoderCnContribution, buildWorkbuddyClientConfig, buildWorkbuddyContribution, summarizeWorkbuddy, workbuddyApplyRefusal } from "./config-export/agent-clients";
+import { buildQoderClientConfig, summarizeQoder, buildQoderContribution, qoderConfigPath } from "./config-export/qoder";
+export { buildQoderClientConfig, qoderConfigPath, qoderHomeDir, type QoderGeneratedConfig } from "./config-export/qoder";
 
 
 
@@ -210,21 +217,6 @@ function ompProfileName(env: OpencodeLaunchEnv): string | undefined {
   return profile;
 }
 
-/**
- * Pi resolves its agent directory from `PI_CODING_AGENT_DIR`, falling back to
- * `~/.pi/agent`. `ompAgentDir` below already reads that variable — OMP is a Pi
- * derivative — so Pi's own resolver honoring it is what makes the two agree
- * rather than a new claim about Pi's contract.
- *
- * A relative override is refused for the same reason MCode's and ZCode's are: a
- * background proxy and a foreground client can have different working
- * directories, and would otherwise disagree about which file is named.
- */
-export function piAgentDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
-  const override = env.PI_CODING_AGENT_DIR?.trim();
-  if (override) return absoluteClientPath(override, home, "PI_CODING_AGENT_DIR");
-  return join(home, ".pi", "agent");
-}
 
 /** Pi's canonical custom-provider catalog. */
 export function piConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
@@ -284,35 +276,6 @@ export function hermesHomeDir(env: OpencodeLaunchEnv = process.env, home: string
 
 export function hermesConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
   return join(hermesHomeDir(env, home), "config.yaml");
-}
-
-/**
- * Expand `~` against the effective home; REFUSE anything still relative.
- *
- * A first attempt at this called `resolve()` and claimed the path would "mean
- * the same thing next time". It does not: `resolve()` only anchors the current
- * invocation, so applying from one directory and disabling from another still
- * resolved two different files — the second reported "not applied" and left
- * the managed block behind with nothing claiming it.
- *
- * There is no honest way to recover the other process's cwd, so a relative
- * selector is refused at the boundary instead of being silently anchored to
- * whichever directory we happened to start in. A `~` path IS stable, because
- * it anchors to the effective home rather than the cwd.
- */
-export class ClientPathError extends Error {}
-
-function absoluteClientPath(raw: string, home: string, variable: string): string {
-  const trimmed = raw.trim();
-  if (trimmed === "~") return home;
-  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) return join(home, trimmed.slice(2));
-  if (!isAbsolute(trimmed)) {
-    throw new ClientPathError(
-      `${variable} must be an absolute path or start with ~; "${trimmed}" depends on the working directory, `
-      + "so opencodex and the client would disagree about which file it names.",
-    );
-  }
-  return trimmed;
 }
 
 /**
@@ -470,20 +433,49 @@ export function mcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
   return join(mcodeHomeDir(env, home), "config.yaml");
 }
 
-/**
- * ZCode (Z.ai's desktop client) keeps everything under `~/.zcode`; custom
- * providers live in `v2/config.json`. `ZCODE_DATA_DIR` mirrors the other
- * clients' override convention; relative overrides are refused for the same
- * reason as MCode's.
- */
-export function zcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
-  const override = env.ZCODE_DATA_DIR?.trim();
-  if (override) return absoluteClientPath(override, home, "ZCODE_DATA_DIR");
-  return join(home, ".zcode");
+/** Bootstrap settings always stay at the default home, even after relocation. */
+export type ZcodePathIO = {
+  readText: (path: string) => { kind: "text"; text: string } | { kind: "missing" } | { kind: "failed"; code?: string };
+};
+const zcodePathIO: ZcodePathIO = {
+  /** Shares the integration reader's four-MiB limit and regular-file-only bootstrap contract. */
+  readText: path => fileIO().readText(path),
+};
+export class ZcodeSettingsPathError extends ClientPathError {}
+
+export function zcodeBootstrapSettingsPath(home: string = homedir()): string {
+  return join(home, ".zcode", "v2", "setting.json");
 }
 
-export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
-  return join(zcodeHomeDir(env, home), "v2", "config.json");
+/** The pre-relocation path is retained solely to recognize historical ownership. */
+export function zcodeLegacyHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.ZCODE_DATA_DIR?.trim();
+  return override ? absoluteClientPath(override, home, "ZCODE_DATA_DIR") : join(home, ".zcode");
+}
+
+/** ZCODE_DATA_DIR names the .zcode root; dataBaseDir names its parent. */
+export function zcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir(), io: ZcodePathIO = zcodePathIO): string {
+  if (env.ZCODE_DATA_DIR?.trim()) return zcodeLegacyHomeDir(env, home);
+  const bootstrap = zcodeBootstrapSettingsPath(home);
+  const read = io.readText(bootstrap);
+  if (read.kind === "missing") return join(home, ".zcode");
+  const unknown = () => new ZcodeSettingsPathError(
+    `ZCode's active data root is unknown: ${bootstrap} must be readable JSON with an absolute dataBaseDir (or no dataBaseDir). Repair the bootstrap setting before enabling or refreshing; no legacy provider will be applied.`,
+  );
+  if (read.kind !== "text") throw unknown();
+  let settings: unknown;
+  try { settings = JSON.parse(read.text); } catch { throw unknown(); }
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) throw unknown();
+  const base = (settings as Record<string, unknown>).dataBaseDir;
+  if (base === undefined) return join(home, ".zcode");
+  // Match the native path's value, without cwd or tilde expansion. The native
+  // ZCODE_DATA_BASE_DIR selector is not an alias for our ZCODE_DATA_DIR.
+  if (typeof base !== "string" || !isAbsolute(base) || base.includes("\0")) throw unknown();
+  return join(base, ".zcode");
+}
+
+export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir(), io?: ZcodePathIO): string {
+  return join(zcodeHomeDir(env, home, io), "v2", "config.json");
 }
 
 /**
@@ -532,8 +524,7 @@ export function commandCodeConfigPath(env: OpencodeLaunchEnv = process.env, home
  * an install that has ever run, the import has already happened and never runs
  * again — every later write to `v2/config.json` is read by nobody (#5348).
  *
- * This project does not write this file; it names it so the integration can
- * tell whether its own write can still reach the client. The env override is
+ * The integration writes this store through its existing schema-aware writer. The env override is
  * ZCode's own (`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`), so an operator who
  * relocated the store is measured against the file their client actually opens
  * rather than the default location. A relative override is refused for the same
@@ -541,10 +532,10 @@ export function commandCodeConfigPath(env: OpencodeLaunchEnv = process.env, home
  * which file it names, and here that disagreement decides whether an apply is
  * reported as effective.
  */
-export function zcodeProviderStorePath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+export function zcodeProviderStorePath(env: OpencodeLaunchEnv = process.env, home: string = homedir(), io?: ZcodePathIO): string {
   const override = env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE?.trim();
   if (override) return absoluteClientPath(override, home, "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE");
-  return join(zcodeHomeDir(env, home), "v2", "provider_config.json");
+  return join(zcodeHomeDir(env, home, io), "v2", "provider_config.json");
 }
 
 /**
@@ -1367,7 +1358,7 @@ function buildAsideContribution(ctx: ExportContext): ManagedContribution {
  * the keyed `providers`, the `models` ARRAY whose identity is `id`, the
  * `openai-completions` dialect, the loopback placeholder, and the
  * `thinkingLevelMap` levels. Evidence:
- * `devlog/_plan/260912_omo_client_integration/001_omo_contract.md`.
+ * `devlog/_fin/260912_omo_client_integration/001_omo_contract.md`.
  *
  * The flag is passed HERE as well as in the spec's `build`, which is the one
  * thing Prime and Aside do not do. They pass the default on both paths, so they
@@ -1399,6 +1390,29 @@ export function clineSettingsDir(env: OpencodeLaunchEnv = process.env, home: str
 }
 
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
+  qoder: {
+    id: "qoder",
+    filename: "qoder-settings.json",
+    destination: env => qoderConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "Qoder reads a non-secret placeholder from settings.json; loopback needs no key.",
+    build: buildQoderClientConfig,
+    format: "json",
+    summarize: summarizeQoder,
+    buildContribution: buildQoderContribution,
+    loopbackOnly: true,
+  },
+  "qoder-cn": {
+    id: "qoder-cn", filename: "qoder-cn-settings.json", destination: env => agentConfigPath("qoder-cn", env),
+    apiKeyEnv: "", exportHint: "Qoder CN uses a non-secret loopback placeholder.", format: "json",
+    build: buildQoderCnClientConfig, summarize: summarizeQoder, buildContribution: buildQoderCnContribution, loopbackOnly: true,
+  },
+  ...Object.fromEntries((["workbuddy", "workbuddy-ai"] as const).map(id => [id, {
+    id, filename: `${id}-models.json`, destination: (env: NodeJS.ProcessEnv) => agentConfigPath(id, env),
+    apiKeyEnv: "", exportHint: "WorkBuddy uses a non-secret loopback placeholder.", format: "json" as const,
+    build: buildWorkbuddyClientConfig, summarize: summarizeWorkbuddy, validateApply: workbuddyApplyRefusal,
+    buildContribution: (ctx: ExportContext) => buildWorkbuddyContribution(id, ctx), loopbackOnly: true,
+  }])) as Record<"workbuddy" | "workbuddy-ai", ExportClientSpec>,
   opencode: {
     id: "opencode",
     filename: "opencode.json",
@@ -1666,6 +1680,21 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     format: "json",
     summarize: summarizeDroid,
     buildContribution: buildDroidContribution,
+    loopbackOnly: true,
+  },
+  "gentle-shell": {
+    id: "gentle-shell",
+    filename: "gentle-shell-models.json",
+    destination: env => gentleShellPaths(env).configPath,
+    apiKeyEnv: "",
+    exportHint: "Gentle Shell uses its persistent selected home; restart the shell to load the catalog. Link/shared homes use the Pi integration.",
+    build: ctx => buildPiClientConfig(ctx, PI_EXPORT_OPTIONS),
+    format: "json",
+    summarize: summarizePi,
+    buildContribution: ctx => {
+      const doc = buildPiClientConfig(ctx, PI_EXPORT_OPTIONS);
+      return singleFragment("gentle-shell", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+    },
     loopbackOnly: true,
   },
 };

@@ -4,6 +4,8 @@ import { stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
+import { captureUpstreamTerminalDiagnostics, upstreamDiagnosticLogFields, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
+export { noteUpstreamRequestId } from "./request-log-terminal-status";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
@@ -12,8 +14,6 @@ import {
   httpStatusFromTerminalError as httpStatusFromClassifiedTerminalError,
   isClientClosedMessage,
   isCyberPolicyCode,
-  isCyberPolicyMessage,
-  isRateLimitOrQuotaFailureMessage,
   isUpstreamResetReplayRefusedMessage,
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
@@ -96,6 +96,8 @@ import type {
 
 const CACHE_DIAGNOSTIC_HOOK = Symbol.for("opencodex.cache-diagnostic.v1");
 interface CacheDiagnosticHooks {
+  /** Whether inbound bodies are actually recorded; the hook is registered at import either way. */
+  enabled(): boolean;
   observeInbound(body: unknown, headers: Headers, source: PromptCacheKeySource): CacheDiagnosticDraft;
   rebind(body: unknown, draft: CacheDiagnosticDraft | undefined): void;
   finalize(facts: CacheDiagnosticFinalFacts): void;
@@ -104,7 +106,12 @@ function cacheDiagnosticHooks(): CacheDiagnosticHooks | undefined {
   return (globalThis as Record<symbol, CacheDiagnosticHooks | undefined>)[CACHE_DIAGNOSTIC_HOOK];
 }
 
-export interface RequestLogContext {
+/** Whether the cache diagnostic recorder will record inbound bodies (`OPENCODEX_CACHE_DEBUG=1`). */
+export function cacheDiagnosticsObserving(): boolean {
+  return cacheDiagnosticHooks()?.enabled() === true;
+}
+
+export interface RequestLogContext extends UpstreamErrorDiagnostics {
   model: string;
   provider: string;
   /** Optional process-lifetime aggregate sink, injected by the server composition owner. */
@@ -143,6 +150,8 @@ export interface RequestLogContext {
   lastOutputAt?: number;
   /** Best-effort chat/session correlation for Logs grouping (#330). Opaque; omit when unknown. */
   conversationId?: string;
+  /** In-memory only: conversationId holds the log-only Hermes digest, which a native id replaces. */
+  conversationIdIsHermesFallback?: boolean;
   surface?: "claude" | "claude-desktop" | "grok";
   /** The matched configured key's id. Set ONLY for admissionKind "configured" —
    *  never a sentinel, so a hand-edited entry whose id happens to be "loopback"
@@ -232,8 +241,6 @@ export interface RequestLogContext {
    * message) extracted from a `response.failed` SSE payload or non-streaming error body, so the
    * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
   upstreamError?: string;
-  upstreamErrorCode?: string;
-  upstreamRequestId?: string;
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
   /** Recognized structured terminal code whose exact identity must survive status mapping. */
@@ -256,6 +263,8 @@ export interface RequestLogContext {
   conversationStateScrub?: "account-change";
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   terminalSource?: "upstream" | "synthetic";
+  /** Closed failure evidence supplied by the transport, never inferred from provider text. */
+  causeHint?: RequestFailureCause;
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
   /** Full eligible provider/model membership from a policy route; never logged. */
@@ -284,7 +293,7 @@ export function rebindCacheDiagnosticBody(
   cacheDiagnosticHooks()?.rebind(body, draft);
 }
 
-export interface RequestLogEntry {
+export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   requestId: string;
   /** The logical request this row belongs to (#4546); absent on rows written without a budget. */
   logicalRequestId?: string;
@@ -344,8 +353,6 @@ export interface RequestLogEntry {
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Secret-redacted upstream error reason, surfaced in /api/logs and the GUI detail modal. */
   upstreamError?: string;
-  upstreamErrorCode?: string;
-  upstreamRequestId?: string;
   usageStatus: UsageStatus;
   usage?: OcxUsage;
   totalTokens?: number;
@@ -844,6 +851,7 @@ export function requestLogErrorCode(
   status: number,
   upstreamError?: string,
   terminalErrorCode?: string,
+  replayRefusal = false,
 ): string | undefined {
   if (status >= 200 && status < 400) return undefined;
   // A structured terminal code is authoritative even when the provider message is localized,
@@ -872,10 +880,8 @@ export function requestLogErrorCode(
     return "permission_denied";
   }
   if (status === 429) {
-    // A refused ambiguous reset answers 429 by design (it must not invite a client
-    // retry that could duplicate inference); classify it by its message so the log
-    // distinguishes a proxy refusal from provider throttling.
-    if (upstreamError?.trim() && isUpstreamResetReplayRefusedMessage(upstreamError)) {
+    // Prefer transport provenance; retain the legacy message fallback for older callers.
+    if (replayRefusal || (upstreamError?.trim() && isUpstreamResetReplayRefusedMessage(upstreamError))) {
       return UPSTREAM_RESET_REPLAY_REFUSED_CODE;
     }
     return "rate_limit_exceeded";
@@ -978,7 +984,7 @@ export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined 
   const raw = usage as {
     input_tokens?: unknown;
     output_tokens?: unknown;
-    input_tokens_details?: { cached_tokens?: unknown; cache_write_tokens?: unknown };
+    input_tokens_details?: { cached_tokens?: unknown; cache_write_tokens?: unknown; cache_write_1h_tokens?: unknown };
     output_tokens_details?: { reasoning_tokens?: unknown };
     total_tokens?: unknown;
     prompt_tokens?: unknown;
@@ -999,6 +1005,9 @@ export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined 
         : {}),
       ...(typeof raw.input_tokens_details?.cache_write_tokens === "number"
         ? { cacheCreationInputTokens: raw.input_tokens_details.cache_write_tokens }
+        : {}),
+      ...(typeof raw.input_tokens_details?.cache_write_1h_tokens === "number"
+        ? { cacheCreation1hInputTokens: raw.input_tokens_details.cache_write_1h_tokens }
         : {}),
       ...(typeof raw.output_tokens_details?.reasoning_tokens === "number"
         ? { reasoningOutputTokens: raw.output_tokens_details.reasoning_tokens }
@@ -1099,24 +1108,6 @@ export function inspectResponseLogSsePayloadParsed(
  * a non-streaming JSON error body. We keep the FIRST non-empty reason (the original failure) and
  * run it through redactSecretString so secrets never reach /api/logs. Pure; safe on any text.
  */
-const UPSTREAM_DIAGNOSTIC_TOKEN = /^[A-Za-z0-9_.:-]{1,128}$/;
-
-function noteBoundedDiagnostic(
-  logCtx: RequestLogContext,
-  field: "upstreamErrorCode" | "upstreamRequestId",
-  value: unknown,
-): void {
-  if (logCtx[field] !== undefined) return;
-  if (typeof value !== "string" || !UPSTREAM_DIAGNOSTIC_TOKEN.test(value)) return;
-  logCtx[field] = value;
-  const status = logCtx.terminalHttpStatus;
-  if (status === undefined || status >= 500) console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${logCtx.upstreamErrorCode ? ` code=${logCtx.upstreamErrorCode}` : ""}${logCtx.upstreamRequestId ? ` request_id=${logCtx.upstreamRequestId}` : ""}`);
-}
-
-export function noteUpstreamRequestId(logCtx: RequestLogContext, headers: Headers): void {
-  noteBoundedDiagnostic(logCtx, "upstreamRequestId", headers.get("openai-request-id") ?? headers.get("x-request-id"));
-}
-
 function captureUpstreamError(logCtx: RequestLogContext, text: string | null): void {
   if (!text) return;
   let parsed: unknown | undefined;
@@ -1134,21 +1125,8 @@ function captureUpstreamErrorParsed(
   parsed: unknown | undefined,
 ): void {
   if (parsed !== undefined && parsed !== null) {
-    const json = parsed as {
-      type?: unknown;
-      error?: { message?: unknown; code?: unknown };
-      last_error?: { message?: unknown; code?: unknown };
-      response?: {
-        error?: { type?: unknown; code?: unknown; message?: unknown };
-        incomplete_details?: { reason?: unknown; message?: unknown };
-      };
-    };
-    captureTerminalHttpStatus(logCtx, json);
-    noteBoundedDiagnostic(
-      logCtx,
-      "upstreamErrorCode",
-      json.error?.code ?? json.response?.error?.code ?? json.last_error?.code,
-    );
+    const json = parsed as UpstreamErrorPayload;
+    captureUpstreamTerminalDiagnostics(logCtx, json);
     const reason = json?.response?.incomplete_details?.reason;
     if (json.type === "response.incomplete"
       && logCtx.terminalIncompleteReason === undefined
@@ -1190,75 +1168,6 @@ function incompleteReasonLabel(reason: string): string {
     default:
       return `Upstream incomplete: ${reason}`;
   }
-}
-
-function captureTerminalHttpStatus(
-  logCtx: RequestLogContext,
-  json: {
-    type?: unknown;
-    code?: unknown;
-    message?: unknown;
-    error?: { type?: unknown; code?: unknown; message?: unknown };
-    last_error?: { type?: unknown; code?: unknown; message?: unknown };
-    response?: {
-      error?: { type?: unknown; code?: unknown; message?: unknown };
-      incomplete_details?: { code?: unknown; message?: unknown; reason?: unknown };
-    };
-  },
-): void {
-  if (logCtx.terminalHttpStatus !== undefined) return;
-  const type = json.type;
-  if (type !== "response.failed" && type !== "response.incomplete" && type !== "error") return;
-  const responseError = json.response?.error;
-  const responseDetails = json.response?.incomplete_details;
-  const candidates: Array<{ type?: unknown; code?: unknown; message?: unknown } | undefined> = [
-    json.error, json.last_error, responseError, responseDetails, json,
-  ];
-  const policy = candidates.some(candidate => (
-    candidate?.code === null || typeof candidate?.code === "string"
-  ) && isCyberPolicyCode(candidate.code as string | null | undefined))
-    || candidates.some(candidate => (
-      typeof candidate?.message === "string"
-      && candidate.message.trim().length > 0
-      && isCyberPolicyMessage(candidate.message)
-    ));
-  if (policy) {
-    logCtx.terminalErrorCode = CYBER_POLICY_ERROR_CODE;
-    logCtx.terminalHttpStatus = 400;
-    return;
-  }
-  // A quota terminal can carry only a structured reason, without an error message.
-  // Keep this separate from normal output limits and from the policy precedence above.
-  const quotaTag = (value: unknown): boolean => value === "usage_limit_reached"
-    || value === "rate_limit_exceeded" || value === "insufficient_quota";
-  const structuredRefusal = candidates.some(candidate => [400, 401, 403, 499].includes(
-    httpStatusFromTerminalError({
-      type: typeof candidate?.type === "string" ? candidate.type : undefined,
-      code: typeof candidate?.code === "string" ? candidate.code : undefined,
-    }),
-  ));
-  const ordinaryIncompleteReason = typeof responseDetails?.reason === "string"
-    && ["max_output_tokens", "content_filter", "steered", "upstream_stall_timeout", "adapter_eof"].includes(responseDetails.reason);
-  if (type === "response.incomplete" && !structuredRefusal && (quotaTag(responseDetails?.reason) || candidates.some(candidate =>
-    quotaTag(candidate?.code)
-    || quotaTag(candidate?.type) || candidate?.type === "rate_limit_error"
-    || (!ordinaryIncompleteReason && typeof candidate?.message === "string" && isRateLimitOrQuotaFailureMessage(candidate.message))
-  ))) {
-    // The shared quota classifier also accepts a numeric HTTP status as its message.
-    // Preserve explicit payment-required evidence rather than relabeling it as 429.
-    logCtx.terminalHttpStatus = candidates.some(candidate => typeof candidate?.message === "string"
-      && Number(candidate.message.trim()) === 402) ? 402 : 429;
-    return;
-  }
-  if (type !== "response.failed" || !responseError || typeof responseError !== "object") return;
-  const responseCode = responseError.code === null || typeof responseError.code === "string"
-    ? responseError.code
-    : undefined;
-  logCtx.terminalHttpStatus = httpStatusFromTerminalError({
-    type: typeof responseError.type === "string" ? responseError.type : undefined,
-    code: responseCode,
-    message: typeof responseError.message === "string" ? responseError.message : undefined,
-  });
 }
 
 /** Map a terminal Responses error object to the HTTP status we record in /api/logs. */
@@ -1467,12 +1376,12 @@ export function addFinalRequestLog(
   const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
     ? 499
     : status;
-  // A locally assigned code wins: it names a refusal this proxy made itself, which no
-  // status-plus-upstream-message classification can reconstruct.
+  // Locally assigned codes name proxy refusals that status and upstream text cannot reconstruct.
   const errorCode = logCtx.errorCode ?? requestLogErrorCode(
     effectiveStatus,
     logCtx.upstreamError,
     logCtx.terminalErrorCode,
+    logCtx.causeHint === "transport-ambiguous" && logCtx.terminalSource === "synthetic",
   );
   // A response.failed whose classified status is 499 is still a client cancel, not an upstream
   // terminal failure — keep /api/logs closeReason aligned with that.
@@ -1502,6 +1411,7 @@ export function addFinalRequestLog(
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     outputObserved: logCtx.firstOutputMs !== undefined,
+    ...(logCtx.causeHint ? { causeHint: logCtx.causeHint } : {}),
     locallyAnswered: logCtx.localTerminalReason !== undefined,
     ...(logCtx.activeAttempt ? { attempt: logCtx.activeAttempt } : {}),
   });
@@ -1528,7 +1438,12 @@ export function addFinalRequestLog(
     ...(attempt.deliverySummary ? { deliverySummary: { ...attempt.deliverySummary } } : {}),
   }));
   const isCombo = logCtx.comboId !== undefined && (attempts?.length ?? 0) > 0;
-  const aggregate = isCombo ? aggregateAttemptUsage(attempts ?? []) : null;
+  // A key or account rotation splits the attempt and clears `logCtx.usage`, so a multi-attempt
+  // request totals from its attempts, combo or not. One attempt keeps the request-level usage
+  // (and its input estimate); a locally answered row sent nothing and keeps its own.
+  const aggregate = isCombo || ((attempts?.length ?? 0) > 1 && logCtx.localTerminalReason === undefined)
+    ? aggregateAttemptUsage(attempts ?? [])
+    : null;
   const loggedUsage = aggregate?.usage ?? existing.usage;
   const usageStatus = aggregate?.status ?? existing.status;
   const totalTokens = aggregate?.totalTokens ?? existing.totalTokens;
@@ -1620,8 +1535,7 @@ export function addFinalRequestLog(
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(logCtx.upstreamError ? { upstreamError: logCtx.upstreamError } : {}),
-    ...(logCtx.upstreamErrorCode ? { upstreamErrorCode: logCtx.upstreamErrorCode } : {}),
-    ...(logCtx.upstreamRequestId ? { upstreamRequestId: logCtx.upstreamRequestId } : {}),
+    ...upstreamDiagnosticLogFields(logCtx),
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
@@ -1808,8 +1722,10 @@ export function noteProviderAttemptSend(
   if (attempt && attempt.sendCount > 0 && attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)) {
     // An input estimate is not evidence that a failed send used that many tokens.
     delete attempt.inputTokenEstimate;
+    // An account-scoped recovery kind names the status the sealed account answered.
     finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status
-      : recovery === "key-401" ? 401 : recovery?.includes("429") ? 429 : 502,
+      : recovery === "key-401" || recovery === "oauth-401" ? 401 : recovery === "oauth-account-403" ? 403
+        : recovery === "oauth-account-402" ? 402 : recovery?.includes("429") ? 429 : 502,
     Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()), attempt.usage);
     // This attempt is being sealed because a NAMED recovery rejected it, so the recovery kind
     // is direct evidence here rather than an inference from history. Without this the sealed
@@ -1938,16 +1854,20 @@ export function finishRequestAttempt(
 export function aggregateAttemptUsage(
   attempts: readonly PersistedUsageAttempt[],
 ): FinalizedUsageResult {
-  const status: UsageStatus = attempts.length > 0
-    && attempts.every(attempt => attempt.usageStatus === "unsupported")
+  // A usage-less attempt that never reached upstream spent nothing (summary.ts `spentNothing`),
+  // so it cannot leave the row's usage unknown.
+  const measured = attempts.filter(attempt => attempt.usage
+    || (attempt.sendCount !== 0 && attempt.locallyAnswered !== true));
+  const status: UsageStatus = measured.length > 0
+    && measured.every(attempt => attempt.usageStatus === "unsupported")
     ? "unsupported"
-    : attempts.some(attempt => (
+    : measured.some(attempt => (
         attempt.usageStatus === "unreported" || attempt.usageStatus === "unsupported"
       ))
       ? "unreported"
-      : attempts.some(attempt => attempt.usageStatus === "estimated")
+      : measured.some(attempt => attempt.usageStatus === "estimated")
         ? "estimated"
-        : attempts.length > 0
+        : measured.length > 0
           ? "reported"
           : "unreported";
 
@@ -1955,7 +1875,7 @@ export function aggregateAttemptUsage(
   if (usages.length === 0) return { status };
 
   const sumOptional = (
-    key: "cachedInputTokens" | "cacheReadInputTokens" | "cacheCreationInputTokens"
+    key: "cachedInputTokens" | "cacheReadInputTokens" | "cacheCreationInputTokens" | "cacheCreation1hInputTokens"
       | "reasoningOutputTokens" | "providerCredits",
   ): number | undefined => {
     const present = usages.flatMap(usage => (
@@ -1964,8 +1884,12 @@ export function aggregateAttemptUsage(
     return present.length > 0 ? present.reduce((sum, value) => sum + value, 0) : undefined;
   };
   const cachedInputTokens = sumOptional("cachedInputTokens");
-  const cacheReadInputTokens = sumOptional("cacheReadInputTokens");
+  // Readers take `cacheReadInputTokens ?? cachedInputTokens` (usage/cost.ts), so once any attempt
+  // reports the read field, an attempt that only reports `cachedInputTokens` must count in it too.
+  const cacheReadInputTokens = sumOptional("cacheReadInputTokens") === undefined ? undefined
+    : usages.reduce((sum, usage) => sum + (usage.cacheReadInputTokens ?? usage.cachedInputTokens ?? 0), 0);
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
+  const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
   const providerCredits = sumOptional("providerCredits");
   const totalTokens = usages.reduce(
@@ -1979,6 +1903,7 @@ export function aggregateAttemptUsage(
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
     ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {}),
     ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
+    ...(cacheCreation1hInputTokens !== undefined ? { cacheCreation1hInputTokens } : {}),
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(providerCredits !== undefined ? { providerCredits } : {}),
     ...(status === "estimated" ? { estimated: true } : {}),

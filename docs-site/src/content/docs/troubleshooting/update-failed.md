@@ -34,6 +34,25 @@ paths. Running `ocx update` in a terminal shows the step that failed and the nex
 
 ## Finish the update
 
+### If npm staging times out
+
+On Windows, the npm-backed `ocx update` staging install has a three-minute budget. A timeout reports
+`ETIMEDOUT` with that budget. On Windows, the updater terminates the installer's entire
+process tree and confirms its exit before removing the stage and recovering the previous
+service. It does not continue extracting into a deleted stage after recovery starts.
+
+If installer exit cannot be confirmed, the update fails and keeps the staging folder and
+its ownership marker. Confirm that no installer or OpenCodex process runs from that folder
+before removing it. A retained folder does not prevent another update attempt.
+
+Check your registry connection if the install repeatedly exceeds the budget, then retry
+`ocx update`. Increasing the budget is not needed to clean up a timed-out install safely.
+
+This process-tree exit guarantee applies to Windows npm updates. POSIX retains its existing
+timeout handling; complete-tree timeout cleanup remains open there.
+
+### Retry or reinstall
+
 1. Close anything that may still run OpenCodex files: the Codex app, terminals that started
    `ocx` or `bunx`, and the OpenCodex tray. A running `bun.exe` or `bunx.exe` keeps its files
    locked on Windows.
@@ -71,6 +90,20 @@ ownership marker. Delete a leftover only after confirming that no OpenCodex proc
 
 If a folder will not delete, a process is still running from it. Signing out or restarting Windows
 releases the lock.
+
+## If the update reports an UNSUPERVISED proxy
+
+When the background service cannot be refreshed after an update, the updater first asks launchd
+(macOS) or the systemd user manager (Linux) to restart the service it already has. If that does not
+bring back a proxy owned by the service, the updater starts the proxy directly so you are not left
+without one, prints a warning that the proxy is running UNSUPERVISED, and exits with a non-zero
+status. That proxy works, but nothing restarts it after a crash, and a later service start can
+compete with it for the port. Run `ocx service repair` to hand it back to the background service,
+then check `ocx status`.
+
+Updates started from the dashboard follow the same order. If only the direct start brings the proxy
+back, the dashboard reports the update as failed with the same UNSUPERVISED message even though the
+new version is installed and answering; run the same repair to clear it.
 
 ## If the proxy answers 503 after a manual install
 

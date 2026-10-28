@@ -3,6 +3,7 @@ import { useKeyedClientResource } from "./client-resource";
 import Dashboard from "./pages/Dashboard";
 import Providers from "./pages/Providers";
 import Models from "./pages/Models";
+import Advisor from "./pages/Advisor";
 import Subagents from "./pages/Subagents";
 import Logs from "./pages/Logs";
 import Usage from "./pages/Usage";
@@ -23,9 +24,10 @@ import { NAV_GROUPS, groupForPage, visibleGroupPages } from "./nav-groups";
 import { SectionSwitcher } from "./components/SectionSwitcher";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
-import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
-import { adminTokenPromptAllowed, apiBaseForPlane, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
+import { bootstrapApiSession, configureApiTargets, hasApiSession, installApiAuthFetch, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
+import { apiBaseForPlane, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
 import { ConnectPairingForm } from "./connect-pairing";
+import { validateRemoteLinkSession } from "./connect-pairing-transport";
 import { type Page } from "./app-routing";
 import { readModelsTab, type ModelsTab } from "./pages/models-tab";
 import { useAppRouteState } from "./use-app-route-state";
@@ -49,6 +51,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
   providers: "nav.providers",
   models: "nav.models",
   subagents: "nav.subagents",
+  advisor: "nav.advisor",
   logs: "nav.logs",
   usage: "nav.usage",
   storage: "nav.storage",
@@ -142,6 +145,7 @@ export default function App() {
   const [targetError, setTargetError] = useState(false);
   const [sharedSessionReady, setSharedSessionReady] = useState(() => hasApiSession("shared"));
   const [sharedSessionEpoch, setSharedSessionEpoch] = useState(0);
+  const [hubPairingOpen, setHubPairingOpen] = useState(false);
   const [remoteWorkspaceAvailableState, setRemoteWorkspaceAvailable] = useState(false);
   const [sessionLoggingOut, setSessionLoggingOut] = useState(false);
   /*
@@ -173,13 +177,7 @@ export default function App() {
       configureApiTargets(next);
       setTargets(next);
       if (next.connected && !hasApiSession("shared")) {
-        try {
-          const response = await fetch(next.shared.bootstrapPath, {
-            cache: "no-store",
-            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]),
-          });
-          if (response.ok) installApiSessionFromHtml("shared", await response.text());
-        } catch { /* pairing form remains available */ }
+        await bootstrapApiSession("shared", controller.signal);
       }
       if (controller.signal.aborted) return;
       setSharedSessionReady(hasApiSession("shared"));
@@ -211,12 +209,12 @@ export default function App() {
   // Claude is a tab inside Connect: both pages render one Integrations shell under one
   // boundary, so moving between Claude and another Connect tab keeps drafts and focus.
   const shellPage: Page = page === "claude" ? "integrations" : page;
-  // A standalone/hub dashboard exposed through an authenticated non-loopback origin can need a
-  // consent-bearing GUI session even though it is not a connected client. Remote Link requires
-  // that stronger principal, so offer the existing one-time pairing flow instead of a dead-end
-  // "sign in" warning. Other pages keep their ordinary admin-token flow unchanged.
-  const remotePairingRequired = page === "remote" && !sharedSessionReady
-    && runtimeRoleFromDocument() === "hub" && adminTokenPromptAllowed();
+  // A Hub can serve the dashboard on a public HTTPS origin without requiring an admin token.
+  // Such a request cannot mint the ordinary loopback session; only an operator-paired session
+  // can manage Remote Link. Pairing recovery therefore follows the actual runtime role and the
+  // RemoteLink authorization result, not the unrelated admin-token prompt policy.
+  const hubPairingAvailable = page === "remote" && runtimeRoleFromDocument() === "hub";
+  const remotePairingFormOpen = hubPairingAvailable && hubPairingOpen;
 
   // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
@@ -577,6 +575,14 @@ export default function App() {
               onFocusOrphaned={focusAfterSwitcher}
             />
           )}
+          {/* Outside the page boundary: a page that fails to render must not hide whose state this is. */}
+          {targetsSettled && targets.link && (
+            <Notice tone="warn">
+              {targets.link.home
+                ? t("connection.linkManaged", { home: targets.link.home, linkId: targets.link.linkId })
+                : t("connection.linkManagedUnnamed", { linkId: targets.link.linkId })}
+            </Notice>
+          )}
           <ErrorBoundary
             key={shellPage}
             pageName={t(PAGE_TKEY[shellPage])}
@@ -598,25 +604,29 @@ export default function App() {
                 {targetError && (
                   <div className="alert alert-err" role="alert">{t("connection.machineUnavailable")}</div>
                 )}
-                {((targets.connected && !sharedSessionReady) || remotePairingRequired) && (
-                  <ConnectPairingForm key={`${targets.shared.serverOrigin}:${targets.shared.bootstrapPath}`} target={targets.shared} onConnected={() => {
-                    setSharedSessionReady(true);
+                {((targets.connected && !sharedSessionReady) || remotePairingFormOpen) && (
+                  <ConnectPairingForm key={`${targets.shared.serverOrigin}:${targets.shared.bootstrapPath}`} target={targets.shared} focusOnMount={remotePairingFormOpen} onConnected={async signal => {
+                    if (remotePairingFormOpen) await validateRemoteLinkSession(sharedBase, undefined, signal);
+                    signal.throwIfAborted();
+                    setHubPairingOpen(false);
+                    setSharedSessionReady(hasApiSession("shared"));
                     setSharedSessionEpoch(epoch => epoch + 1);
                   }} />
                 )}
-                {page === "dashboard" && <Dashboard apiBase={sharedBase} connected={targets.connected}
+                {page === "dashboard" && <Dashboard apiBase={sharedBase} readOnly={targets.link !== undefined} connected={targets.connected}
                   authenticationPending={targets.connected && !sharedSessionReady} refreshEpoch={sharedSessionEpoch} />}
                 {page === "startup" && <Startup apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
                 {page === "providers" && <Providers apiBase={sharedBase} />}
                 {page === "models" && <Models key={sharedBase} apiBase={sharedBase} restartEpoch={codexRestartEpoch} connected={targets.connected} catalogSyncedAt={targets.catalogSyncedAt} reportRestart={report} />}
                 {page === "subagents" && <Subagents key={sharedBase} apiBase={sharedBase} />}
+                {page === "advisor" && <Advisor key={sharedBase} apiBase={sharedBase} />}
                 {page === "logs" && <Logs apiBase={sharedBase} />}
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />}
                 {page === "storage" && <Storage apiBase={sharedBase} />}
-                {page === "remote" && !remotePairingRequired && <RemoteLink apiBase={sharedBase} sessionReady={sharedSessionReady} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
+                {page === "remote" && !remotePairingFormOpen && <RemoteLink key={`${sharedBase}:${sharedSessionEpoch}`} apiBase={sharedBase} sessionReady={sharedSessionReady} pairingRecoveryAvailable={hubPairingAvailable} onRequestPairing={() => setHubPairingOpen(true)} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
                 {page === "remote-workspace" && <RemoteWorkspaceRoute available={remoteWorkspaceAvailable} apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} onOpenRemoteLink={() => navigateToPage("remote")} />}
                 {page === "headroom" && <Headroom apiBase={sharedBase} />}
-                {page === "codex-set" && <CodexSet apiBase={sharedBase} />}
+                {page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
 
                 {shellPage === "api-keys" && <ApiKeysPage apiBase={sharedBase} />}
                 {shellPage === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}

@@ -186,6 +186,8 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `commandcode` | `~/.commandcode/providers.json` (Windows 使用默认主目录时：仅当 `HOME ?? USERPROFILE` 的值非空、非纯空白且为 Windows 绝对路径时使用，否则使用 `homedir()`；单独传入的主目录保持不变；文件位于其下的 `.commandcode\providers.json`) | `providers.json` | 仅限回环；`apiKey: false`；无需环境变量 |
 | `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | 仅限回环；无需环境变量 |
 
+以上路径为默认值。在默认主目录的 `~/.zcode/v2/setting.json` 中设置绝对路径 `dataBaseDir` 后，存储路径变为 `<dataBaseDir>/.zcode/v2/provider_config.json`。`ZCODE_DATA_DIR` 直接指定 `.zcode` 根目录并优先于设置；`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 优先指定提供商文件。设置格式错误、不可读或使用相对路径时，新应用和刷新会被拒绝。已有所有权和恢复记录保留。参见[路径与恢复规则的英文原文](https://opencodex.me/guides/integrations/#zcode-314-and-later)。
+
 Raycast 导出是一份独立的 `providers.yaml` 文档，在 `providers` 序列中只有一个 `id: opencodex` 元素：`name: OpenCodex`、代理的 `/v1` 基础 URL，以及每个已路由模型及其 `abilities`（`tools` 与 `system_message` 始终支持，`vision` 取自目录的输入模态，`reasoning_effort` 在模型有 effort 阶梯时设置，`temperature` 对推理模型关闭）。Custom Providers 是 Raycast Pro 功能，且 Raycast 会监视该文件，因此保存后的更改无需重启即可生效。格式见 [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers)。不会写入任何 `api_keys` 条目，所以该导出仅限回环，非回环绑定会被拒绝。
 
 opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi 导出不需要环境变量，而是携带字面占位值 `opencodex-loopback`。这个值是必需的：Pi 在构建模型列表时会解析 `apiKey`，如果已有配置包含未设置的环境变量引用，它就会隐藏整个 provider。回环上的代理从不校验生成的占位值。
@@ -206,7 +208,9 @@ opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi �
 
 管理无头运行时设置、启动、同步、诊断和更新。
 
-`ocx system codex-restart --yes` 通过与 `ocx sync --restart-codex` 相同的模块重启 Codex app-server，并完全退出再重新启动 Codex 桌面应用。若代理本身运行在 Codex 应用内部，该命令会给出可执行提示并拒绝，而不是承诺无法完成的移交。
+`ocx system codex-restart --yes` 通过与 `ocx sync --restart-codex` 相同的模块重启 Codex app-server。模型选择器在应用启动时构建，因此当桌面应用在当前模型目录写入之前启动，或本次请求更改了 `model_catalog_json` 绑定时，会完全退出再重新启动它。否则应用保持打开，自行重启其 app-server，并保留未发送的草稿和待处理的审批。若无法读取应用或目录状态，则执行完整重启。若代理本身运行在 Codex 应用内部，桌面重启会给出可执行提示并拒绝，而不是承诺无法完成的移交。
+
+如果本次请求更改了 `model_catalog_json` 绑定，即使桌面进程启动于目录文件写入之后，也会触发桌面重启。
 
 ```bash
 ocx system settings --stream-mode eager-relay
@@ -218,7 +222,7 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check` 不会向软件包注册表发起请求，只会在限定范围内检查已配置候选项的来源证据，包括经过脱敏的可执行文件位置和所有权证据。受信任的已发布启动器上下文只能验证该候选项快照，并不证明 Codex 已成功运行。由于这条一次性命令绝不会运行 Codex，来自环境变量和持久化记录的候选项仅用于报告（`managed: false`，通常为 `selection_unattested`）；JSON 输出包含 `candidateAvailable`、`candidateVersion` 和 `candidateSource`，且 `selectionAttested` 始终为 `false`。检查已配置候选项需要受信任的已发布启动器上下文；直接使用 Bun 启动或从源码运行时没有这项证明，因此会忽略环境变量和持久化记录中的候选项状态，并可能在 POSIX 系统上报告 `candidate_unavailable`。在 Windows 上，这个首个切片不会对候选路径或配置路径执行任何文件系统 I/O。只有由受信任启动器捕获的绝对环境候选项可以获得应用捆绑或版本管理器的纯词法标签；其他所有 Windows 候选项都会以失败关闭方式处理。由于这个切片完全不读取持久化的选择状态，在未捕获任何环境候选项的 Windows 运行中会报告 `windows_inspection_deferred` 而非 `candidate_unavailable`：该命令无法观测 Codex CLI 是否已安装，因此报告检查被推迟，而不是断言不存在候选项。该命令不会运行 Codex 或软件包管理器，不会修复 shim，不会写入配置或缓存，不会停止进程，也不会安装任何内容。随应用捆绑的候选项、位于已识别版本管理器路径中的候选项、未经验证的独立候选项以及 shim 状态不明确的候选项，都会报告为 `unmanaged` 或 `unknown`，绝不会归类为 `managed`。
+`check` 不查询注册表，也不运行 Codex。在 POSIX 上，当已发布启动器捕获的环境候选项与运行时解析器选择的规范路径一致时，`selectionAttested` 可以为 `true`；如果关联的 npm-global 软件包清单证明了所有权，`managed` 可以为 `true`。持久化候选项仍不获认证。Windows 不读取候选项或配置文件，而是推迟检查。直接通过 Bun 或源码运行时没有启动器证明。`plan` 使用隔离的临时 npm 配置、缓存和日志查询官方注册表，并拒绝活动会话或不完整的进程观测。它不安装软件，也不向进程发送信号。请参阅[完整命令和拒绝原因（英文）](/reference/cli/agents/#read-only-codex-cli-update-plan)。
 
 在 Windows 上，如果捕获到 `CODEX_CLI_PATH=codex` 这样的裸命令、远程路径或设备路径，则报告 `candidate_path_unavailable`。这些情况下候选项已被捕获，但其路径不适用于此检查。
 

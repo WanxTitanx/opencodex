@@ -26,6 +26,11 @@ export const FILE_INTEGRATION_CLIENTS = [
   "commandcode",
   "kilo",
   "droid",
+  "qoder",
+  "qoder-cn",
+  "workbuddy",
+  "workbuddy-ai",
+  "gentle-shell",
 ] as const;
 
 export const INTEGRATION_REFUSAL_REASONS: ReadonlySet<string> = new Set<IntegrationRefusalReason>([
@@ -55,6 +60,7 @@ const MISSING_STORE_DOCUMENT = /^[\x20-\x7e]{1,64}$/;
 const PLAN_CHANGE_KEYS = new Set(["kind", "path"]);
 const PLAN_PSEUDO_PATHS = new Set(["$snapshot", "$ownership", "$journal"]);
 const PLAN_SCHEMA_PATHS = new Set([
+  "*", // A WorkBuddy legacy document is a top-level model array.
   "provider.opencodex",
   "providers.opencodex",
   "models.providers.opencodex",
@@ -65,6 +71,7 @@ const PLAN_SCHEMA_PATHS = new Set([
   "settings.providers.opencodex",
   "catalog.providers.opencodex",
   "customModels.*",
+  "modelConfigs.customModels.*",
   // ZCode reads its providers from a second file; a plan for it publishes that
   // file's templates, and a path missing here is rejected as an invalid preview.
   "config.providerConfigRules.providerRules.[providerId=opencodex]",

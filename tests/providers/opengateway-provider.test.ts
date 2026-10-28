@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fixture from "../fixtures/opengateway-models.json";
+import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { buildCatalogEntries, gatherRoutedModels } from "../../src/codex/catalog";
 import { clearModelCache } from "../../src/codex/model-cache";
 import { buildModelsRequest } from "../../src/oauth";
-import { deriveInitProviders, deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
+import { deriveInitProviders, deriveProviderPresets, enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
 import { extractProviderModelItems, resolveProviderModelDiscovery, providerModelDiscoverySpecError } from "../../src/providers/model-discovery";
 import { PROVIDER_REGISTRY, providerModelWireDefault } from "../../src/providers/registry";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
-import type { OcxConfig } from "../../src/types";
+import { withTestTranslatorBudget } from "../helpers/translator-budget";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 const entry = PROVIDER_REGISTRY.find(row => row.id === "opengateway")!;
 const provider = { ...providerConfigSeed(entry), apiKey: "test-key" };
 const discovery = resolveProviderModelDiscovery("opengateway", provider);
@@ -69,6 +71,128 @@ describe("OpenGateway", () => {
       const catalog = buildCatalogEntries(null, [], models);
       expect(catalog.map(row => row.slug)).toEqual(expected.map(id => `opengateway/${id.replaceAll("/", "-")}`));
       expect(catalog.slice().sort((a,b)=>Number(a.priority)-Number(b.priority)).map(row=>row.slug)).toEqual(catalog.map(row=>row.slug));
+    }
+  });
+});
+
+// #6877: on the Responses wire OpenGateway answers 400 to replayed native custom tool history.
+describe("OpenGateway Responses custom tools", () => {
+  // A row written by an older install carries no supportsResponsesCustomTools of its own.
+  const saved = (): OcxProviderConfig => ({ adapter: "openai-chat", baseUrl: "https://apis.opengateway.ai/v1", apiKey: "test-key" } as OcxProviderConfig);
+  test("the preset declares native custom tool shapes unsupported, without overriding an explicit value", () => {
+    expect(entry.supportsResponsesCustomTools).toBe(false);
+    const inherited = saved();
+    enrichProviderFromRegistry("opengateway", inherited);
+    expect(inherited.supportsResponsesCustomTools).toBe(false);
+    const explicit = { ...saved(), supportsResponsesCustomTools: true };
+    enrichProviderFromRegistry("opengateway", explicit);
+    expect(explicit.supportsResponsesCustomTools).toBe(true);
+  });
+  test("replayed exec history whose tool is no longer declared reaches the upstream as function calls", () => {
+    const routed = saved();
+    enrichProviderFromRegistry("opengateway", routed);
+    const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter({ ...routed, adapter: "openai-responses" }));
+    const built = adapter.buildRequest({
+      modelId: expected[0]!,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: expected[0],
+        input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "list files" }] },
+          { type: "custom_tool_call", call_id: "call_exec", name: "exec", input: "text(1)" },
+          { type: "custom_tool_call_output", call_id: "call_exec", output: "1" },
+        ],
+      },
+    } as Parameters<typeof adapter.buildRequest>[0], { headers: new Headers() });
+    const body = JSON.parse(String(built.body)) as { input: Array<Record<string, unknown>> };
+    expect(body.input.map(item => item.type)).toEqual(["message", "function_call", "function_call_output"]);
+    expect(body.input[1]).toMatchObject({ call_id: "call_exec" });
+    expect(body.input[2]).toMatchObject({ call_id: "call_exec" });
+  });
+});
+
+describe("OpenGateway Responses tool result arrays", () => {
+  function build(input: Record<string, unknown>[], baseUrl = "https://apis.opengateway.ai/v1") {
+    const raw = { model: "z-ai/glm-5.3-flash-ultrafast", input };
+    const snapshot = JSON.stringify(raw);
+    const routed: OcxProviderConfig = { ...provider, baseUrl };
+    enrichProviderFromRegistry("opengateway", routed);
+    const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter({ ...routed, adapter: "openai-responses" }));
+    const request = adapter.buildRequest({
+      modelId: raw.model, context: { messages: [] }, stream: false, options: {}, _rawBody: raw,
+    } as Parameters<typeof adapter.buildRequest>[0], { headers: new Headers() });
+    expect(JSON.stringify(raw)).toBe(snapshot);
+    const body: { input: Record<string, unknown>[] } = JSON.parse(String(request.body));
+    return body.input;
+  }
+
+  for (const kind of ["function", "custom_tool"] as const) {
+    test(`${kind} text result arrays reach OpenGateway as strings`, () => {
+      const input = build([
+        { type: `${kind}_call`, call_id: "call_array", name: "exec", ...(kind === "function" ? { arguments: "{}" } : { input: "text(1)" }) },
+        { type: `${kind}_call_output`, call_id: "call_array", output: [{ type: "input_text", text: "first" }, { type: "input_text", text: "second" }] },
+      ]);
+      expect(input).toContainEqual(expect.objectContaining({ type: "function_call_output", call_id: "call_array", output: "first\nsecond" }));
+    });
+  }
+
+  test("parallel image results retain image bytes and all paired outputs before image messages", () => {
+    const image = { type: "input_image", image_url: "data:image/png;base64,cHJvYmU=", detail: "original" };
+    const input = build([
+      { type: "function_call", call_id: "a", name: "echo", arguments: "{}" },
+      { type: "function_call", call_id: "b", name: "echo", arguments: "{}" },
+      { type: "function_call_output", call_id: "a", output: [{ type: "input_text", text: "before" }, image, { type: "input_text", text: "after" }] },
+      { type: "function_call_output", call_id: "b", output: [] },
+    ]);
+    expect(input.map(item => item.type)).toEqual(["function_call", "function_call", "function_call_output", "function_call_output", "message"]);
+    expect(input[2]).toMatchObject({ call_id: "a", output: "before\nafter" });
+    expect(input[3]).toMatchObject({ call_id: "b", output: "" });
+    expect(input[4]).toMatchObject({ role: "user", content: expect.arrayContaining([{ ...image, detail: "high" }]) });
+  });
+
+  test("OpenGateway user images normalize original detail without changing image bytes", () => {
+    const image = { type: "input_image", image_url: "data:image/png;base64,cHJvYmU=", detail: "original" };
+    const input = build([{ type: "message", role: "user", content: [image] }]);
+    expect(input[0]).toMatchObject({ content: [{ ...image, detail: "high" }] });
+  });
+
+  test("reversed parallel results stay together before their image messages", () => {
+    const image = { type: "input_image", image_url: "data:image/png;base64,cHJvYmU=", detail: "high" };
+    const input = build([
+      { type: "function_call", call_id: "a", name: "echo", arguments: "{}" },
+      { type: "function_call", call_id: "b", name: "echo", arguments: "{}" },
+      { type: "function_call_output", call_id: "b", output: [image] },
+      { type: "function_call_output", call_id: "a", output: "done" },
+    ]);
+    expect(input.map(item => item.type)).toEqual(["function_call", "function_call", "function_call_output", "function_call_output", "message"]);
+    expect(input[2]?.call_id).toBe("b");
+    expect(input[3]?.call_id).toBe("a");
+    expect(input[4]).toMatchObject({ role: "user", content: expect.arrayContaining([image]) });
+  });
+
+  test("other destinations keep arrays and original image detail", () => {
+    const output = [{ type: "input_text", text: "unchanged" }, { type: "input_image", image_url: "data:image/png;base64,cHJvYmU=", detail: "original" }];
+    const input = build([
+      { type: "function_call", call_id: "a", name: "echo", arguments: "{}" },
+      { type: "function_call_output", call_id: "a", output },
+    ], "https://api.openai.com/v1");
+    expect(input.find(item => item.type === "function_call_output")?.output).toEqual(output);
+  });
+
+  test("string results are preserved and unsupported arrays fail before dispatch", () => {
+    const paired = (output: unknown) => [
+      { type: "function_call", call_id: "a", name: "echo", arguments: "{}" },
+      { type: "function_call_output", call_id: "a", output },
+    ];
+    expect(build(paired("exact string")).find(item => item.type === "function_call_output")?.output).toBe("exact string");
+    for (const output of [
+      [{ type: "encrypted_content", encrypted_content: "opaque" }],
+      [{ type: "refusal", refusal: "no" }],
+      [{ type: "input_text", text: "keep" }, { type: "input_file", file_id: "file_1" }],
+    ]) {
+      expect(() => build(paired(output))).toThrow("OpenGateway cannot preserve this tool result");
     }
   });
 });

@@ -27,6 +27,10 @@ function fixture(side: string, allowedOrigins: string[]) {
   for (const path of [paths.ocx, paths.codex, paths.desktop, paths.user]) mkdirSync(path, { recursive: true });
   // A valid, isolated API-key auth file prevents fallback to a real OAuth account.
   writeFileSync(join(paths.codex, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "fixture-only-not-a-real-key" }), { mode: 0o600 });
+  // Keep a host Codex's asynchronous bundled catalog from changing native order mid-apply.
+  const catalog = join(paths.codex, "fixture-native-catalog.json");
+  writeFileSync(catalog, JSON.stringify({ models: [{ slug: "gpt-5.5", base_instructions: "fixture" }] }));
+  writeFileSync(join(paths.codex, "config.toml"), `model_catalog_json = ${JSON.stringify(catalog)}\n`);
   const env: Record<string, string | undefined> = {
     HOME: paths.user, USERPROFILE: paths.user,
     OPENCODEX_HOME: paths.ocx, CODEX_HOME: paths.codex,
@@ -232,7 +236,7 @@ for (const storedProfile of [true, false]) {
     expect(chosenEntry).toBeDefined();
     // A stored date-shaped slot (20260211) is emitted as its p<base36day> wire id (#5862), so
     // Desktop's date stripping cannot collapse it onto a real dated Anthropic id.
-    if (storedProfile) expect(chosenEntry!.name).toBe("claude-opus-4-8-p015");
+    if (storedProfile) expect(chosenEntry!.name).toBe("claude-fable-5-p015");
     else expect(chosenEntry!.name).toMatch(/^claude-opus-4-8-[a-z][a-z0-9]{2}$/);
 
     const apply = spawnOwned(client, ["claude", "desktop", "apply", "--static"]);

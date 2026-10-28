@@ -173,7 +173,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | 秘密ではないループバック用プレースホルダー |
 | `dsh` | `$DSH_HOME/settings.yaml`（既定 `~/.dsh/settings.yaml`） | `settings.yaml` | なし — 秘密ではないループバック bearer プレースホルダー |
 | `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`、次に旧 `MAVIS_DATA_DIR` が設定時に優先。相対値は拒否されます) | `mcode-config.yaml` | なし — loopback placeholder |
-| `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR` が設定時に優先。相対値は拒否されます) | `config.json` | なし — loopback placeholder |
+| `zcode` | `~/.zcode/v2/config.json` (既定ホームの `setting.json` にある `dataBaseDir` がルートを移動。`ZCODE_DATA_DIR` が設定時に優先。相対値は拒否されます) | `config.json` | なし — loopback placeholder |
 | `prime` | `~/.prime/agent/models.json` (`PRIME_AGENT_CODING_AGENT_DIR` が設定時に優先。相対値は拒否されます) | `prime-models.json` | なし — loopback placeholder |
 | `aside` | `~/.aside/u/<account>/models.json`。Aside 自身の `accounts.json` が現在のアカウントとして指す account を使います。マニフェストが読めない場合は、既定のアカウントに落とさず拒否します | `aside-models.json` | なし — loopback placeholder |
 | `raycast` | `~/.config/raycast/ai/providers.yaml` (macOS と Windows で同じ。Raycast は `XDG_CONFIG_HOME` を尊重しません) | `raycast-providers.yaml` | なし — loopback のみ。`api_keys` エントリは書き込まれません |
@@ -181,6 +181,8 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `kilo` | `~/.config/kilo` 配下で最初に存在する `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json`、`config.json`（`XDG_CONFIG_HOME` が設定されていればその配下）。候補がなければ `kilo.jsonc` | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
 | `commandcode` | `~/.commandcode/providers.json` (Windows の既定ホームを使用する場合: `HOME ?? USERPROFILE` が空文字列や空白のみではなく Windows の絶対パスの場合に限り使用し、それ以外は `homedir()`。別途指定されたホームは保持。その配下の `.commandcode\providers.json`) | `providers.json` | ループバックのみ・`apiKey: false`・環境変数不要 |
 | `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | ループバックのみ・環境変数不要 |
+
+上記のパスは既定値です。既定のホームにある `~/.zcode/v2/setting.json` に絶対パスの `dataBaseDir` を指定すると、保存先は `<dataBaseDir>/.zcode/v2/provider_config.json` に移ります。`ZCODE_DATA_DIR` は `.zcode` ルートそのものを指定して設定値より優先され、`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` はプロバイダーファイルのパスで優先されます。不正な設定、読み取れない設定、相対パスでは新しい適用と更新を拒否します。既存の所有権と復元記録は保持されます。[パスと復元規則の原文](https://opencodex.me/guides/integrations/#zcode-314-and-later)を参照してください。
 
 Raycast のエクスポートは、`providers` シーケンスに `id: opencodex` 要素を 1 つだけ持つ独立した `providers.yaml` 文書です。内容は `name: OpenCodex`、プロキシの `/v1` ベース URL、および `abilities` 付きのルーティング済み全モデルです (`tools` と `system_message` は常にサポート、`vision` はカタログの入力モダリティから、`reasoning_effort` はモデルに effort ラダーがある場合、`temperature` は推論モデルではオフ)。Custom Providers は Raycast Pro の機能で、Raycast はこのファイルを監視しているため、保存した変更は再起動なしで反映されます。形式は [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers) に記載されています。`api_keys` エントリは書き込まれないため、このエクスポートは loopback 専用で、loopback 以外のバインドは拒否されます。
 
@@ -202,7 +204,9 @@ opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。opencodex �
 
 ヘッドレス ランタイムの設定、起動、同期、診断、更新を管理します。
 
-`ocx system codex-restart --yes` は `ocx sync --restart-codex` と同じモジュールで Codex app-server を再起動し、デスクトップ アプリも完全に終了して再起動します。プロキシ自体が Codex アプリ内で動いている場合、完了できない引き渡しを約束せず、実行可能な案内とともに拒否します。
+`ocx system codex-restart --yes` は `ocx sync --restart-codex` と同じモジュールで Codex app-server を再起動します。モデル ピッカーは起動時に構築されるため、デスクトップ アプリを完全に終了して再起動するのは、現在のモデル カタログが書き込まれる前にアプリが起動していた場合、またはこのリクエストで `model_catalog_json` の参照先が変わった場合です。それ以外の場合、アプリは開いたまま自身の app-server を再起動し、未送信の下書きや保留中の承認を保持します。アプリまたはカタログの状態を読み取れない場合は完全な再起動を行います。プロキシ自体が Codex アプリ内で動いている場合、デスクトップの再起動は完了できない引き渡しを約束せず、実行可能な案内とともに拒否します。
+
+このリクエストで `model_catalog_json` の参照先が変わった場合も、シェルがカタログファイルの書き込み後に起動していてもデスクトップを再起動します。
 
 ```bash
 ocx system settings --stream-mode eager-relay
@@ -214,7 +218,7 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check` はパッケージレジストリに問い合わせず、設定済みのインストール候補について、秘匿化された実行ファイルの場所や所有権を示す根拠を含む来歴情報を、範囲を限定して検査します。公開ランチャー由来の信頼済みコンテキストが真正性を裏付けるのは候補のスナップショットだけであり、Codex が正常に実行されたことではありません。この単発コマンドは Codex を一切実行しないため、環境または永続化された状態から得た候補は報告対象にとどまります（`managed: false`、通常は `selection_unattested`）。`selectionAttested` は常に `false` です。JSON 出力には `candidateAvailable`、`candidateVersion`、`candidateSource`、`selectionAttested: false` が含まれます。Bun またはソースから直接起動するとランチャーの証明がないため、環境由来および永続化された候補を無視し、POSIX では `candidate_unavailable` を報告することがあります。Windows では、この最初のスライスは候補や構成のパスに対するファイルシステム I/O を一切行いません。信頼済みランチャーが取り込んだ絶対パスの環境候補だけを、アプリ同梱またはバージョンマネージャーとして字句的に報告でき、それ以外の Windows 候補はすべて失敗時閉鎖になります。このスライスは永続化された選択状態を一切読み取らないため、環境候補がキャプチャされていない Windows 実行では `candidate_unavailable` ではなく `windows_inspection_deferred` を報告します。コマンドは Codex CLI が導入されているかどうかを観測できないので、候補が存在しないと断定せず、検査が延期されたことを報告します。このコマンドは Codex やパッケージマネージャーの実行、shim の修復、設定やキャッシュ状態への書き込み、プロセスの停止、インストールを行いません。アプリ同梱、認識済みのバージョンマネージャー、未検証のスタンドアロン、曖昧な shim の各候補は管理対象外または不明として報告され、管理対象と判定されることはありません。
+`check` はレジストリへの問い合わせも Codex の実行も行いません。POSIX では、公開ランチャーが記録した環境候補とランタイムリゾルバーが選ぶ正規パスが一致すると `selectionAttested: true` になり、リンクされた npm-global パッケージのマニフェストで所有権を確認でき、候補バージョンが報告されている場合はそれがマニフェストのバージョンと一致するときに `managed: true` になります。永続化された候補は認証されません。Windows は候補や設定ファイルを読まずに検査を延期します。Bun やソースからの直接実行にはランチャーの証明がありません。`plan` は分離した一時 npm 設定・キャッシュ・ログで公式レジストリに問い合わせ、実行中のセッションや不完全なプロセス観測を拒否します。インストールやプロセスへのシグナル送信は行いません。[コマンドと拒否理由の詳細（英語）](/reference/cli/agents/#read-only-codex-cli-update-plan)を参照してください。
 
 Windows で `CODEX_CLI_PATH=codex` のような単純なコマンド名、リモートパス、デバイスパスが候補としてキャプチャされた場合は、`candidate_path_unavailable` を報告します。候補は取得されていますが、そのパスはこの検査の対象になりません。
 

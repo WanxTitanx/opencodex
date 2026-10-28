@@ -1,8 +1,14 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
+import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
+import { accountPauseStateSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
+import { nativeReasoningRetentionSchema } from "./native-reasoning-retention";
+import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
+import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
+import { fallbackPolicySchema } from "./fallback-policy";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -28,7 +34,9 @@ import {
   CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR,
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
+  autoReviewOverrideSchema,
   compactionRoutingSchema,
+  reasoningRetentionSchema,
   memoryModelSettingSchema,
   memoryModelsSchema,
   modelPreferHostedToolsConfigError,
@@ -48,6 +56,7 @@ import {
   providerHeadersConfigError,
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  credentialPinnedProviderConfigError,
 } from "../provider-validation";
 import {
   CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR,
@@ -83,6 +92,7 @@ export const protocolConfigSchema = z.object({
     managedMessagesNative: z.boolean().optional(),
     managedMessagesNativeOAuth: z.boolean().optional(),
     directEncoders: z.boolean().optional(),
+    antigravityDirect: z.boolean().optional(),
     shadowPlan: z.boolean().optional(),
   }).strict().optional(),
 }).strict();
@@ -111,6 +121,8 @@ export const configSchema = z.object({
     enabled: z.boolean().optional().catch(false),
     baseUrl: z.string().optional().catch(undefined),
   }).strict().optional().catch(undefined),
+  // Same contract as metricsExport: a malformed hand edit leaves recovery off; live writes reject it.
+  serviceHealthRecovery: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
   // Kept raw on purpose: `.catch(undefined)` would turn a mistyped `enabled` into "inherit",
   // which can reopen a surface the operator meant to close. src/protocols/settings.ts parses it
   // and fails closed instead.
@@ -128,6 +140,7 @@ export const configSchema = z.object({
         managedMessagesNative: false,
         managedMessagesNativeOAuth: false,
         directEncoders: fields.directEncoders === true,
+        antigravityDirect: fields.antigravityDirect === true,
         shadowPlan: fields.shadowPlan === true,
       },
     };
@@ -158,6 +171,9 @@ export const configSchema = z.object({
     .min(0)
     .optional()
     .catch(undefined),
+  // Opt-in outbound request compression (#7247). An unknown codec degrades to identity, matching
+  // the guards above: a hand-edit typo must not change what the proxy sends or refuse traffic.
+  upstreamRequestCompression: z.enum(["off", "gzip", "zstd"]).optional().catch(undefined),
   // Opt-in inbound body ceiling (#3573). An invalid hand edit degrades to the 256 MiB default
   // rather than failing the parse, matching the outbound guard above: a malformed number must
   // not change what the proxy admits. The hard ceiling is NOT enforced here — because of that
@@ -191,9 +207,16 @@ export const configSchema = z.object({
     z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535).optional() }),
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
+  // Models settings panel writes the global reviewer override; an invalid hand edit is
+  // stripped by load degradation so it cannot reject the providers that carry it.
+  autoReviewOverride: autoReviewOverrideSchema.optional(),
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
   compactionRouting: compactionRoutingSchema.optional().catch(undefined),
   compactionRecovery: compactionRecoverySchema.optional().catch(undefined),
+  // A bad hand edit disables only this block; writes validate the catch-free leaf first.
+  reasoningRetention: reasoningRetentionSchema.optional().catch(undefined),
+  nativeReasoningRetention: nativeReasoningRetentionSchema.optional().catch(undefined),
+  desktopCompatibility: desktopCompatibilitySchema.optional().catch(undefined),
   // A hand-edited malformed phase disables only that phase instead of rejecting
   // providers/apiKeys, matching the load-time degradation notice; the management write
   // boundary (validateConfigCandidate) still refuses the bad value through the shared,
@@ -207,6 +230,7 @@ export const configSchema = z.object({
     .catch(undefined),
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
+  preferModelAliasIds: z.boolean().optional().catch(false),
   // Malformed hand edits disable this opt-in projection without rejecting providers.
   cursorEffortRows: z.boolean().optional().catch(false),
   // Fast selectors default on; malformed hand edits disable them without rejecting providers.
@@ -221,6 +245,13 @@ export const configSchema = z.object({
     short: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
     long: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
   }).optional().catch(undefined),
+  // A malformed fallback section disables only the reroute, never the lock's refusal
+  // behavior; the management write boundary still rejects the bad value.
+  codexMainAccountHardLockFallback: mainAccountHardLockFallbackSchema.optional().catch(undefined),
+  // OCX-11: a malformed section reads as absent, which keeps today's fallback behavior.
+  fallback: fallbackPolicySchema.optional().catch(undefined),
+  // #2999: a malformed hand edit falls back to auto detection rather than rejecting the config.
+  nativeMainRefresh: z.enum(["codex", "opencodex"]).optional().catch(undefined),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),
@@ -285,11 +316,23 @@ export const configSchema = z.object({
   // and the default label is emitted, rather than failing the parse or writing a config Codex
   // would refuse to load — the provider id routing depends on is never derived from it.
   codexProviderDisplayName: z.string().trim().min(1).max(128).optional().catch(undefined),
+  // Preserve an invalid marker: silently treating corrupt epochs as legacy would grant stale attempts authority.
+  accountAutoPausePolicyRevisions: z.record(z.string(), z.uuid()).nullable().optional().catch(null),
+  // Details are display-only; keep each usable resume revision and the separate paused-id authority.
+  codexAccountPauseState: z.preprocess(value => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    return Object.fromEntries(Object.entries(value).flatMap(([id, row]) => {
+      if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.revision !== "string") return [];
+      const parsed = accountPauseStateSchema.safeParse({ [id]: row });
+      return [[id, parsed.success ? parsed.data[id] : { revision: row.revision }]];
+    }));
+  }, accountPauseStateSchema.optional()),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
   // A malformed allow-list degrades to "no account spends credits" rather than failing the parse,
   // so a hand-edited typo cannot trip the backup-and-defaults repair path; the write path rejects
   // it (creditCodexAccountIdsError in diagnostics).
   creditCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional().catch(undefined),
+  codexUseRemainingQuotaAccountIds: z.custom<string[]>(validRemainingQuotaAccountIds).optional().catch(undefined),
   // A malformed policy degrades to "no policy" rather than failing the parse, so a hand-edited
   // typo cannot trip the backup-and-defaults repair path and wipe providers or pool accounts.
   // Silently ignoring it would be its own trap, so the write path rejects it and loadConfig warns.
@@ -305,6 +348,7 @@ export const configSchema = z.object({
   codexAccountAutoSwitchThresholds: z.unknown().optional().transform(salvageCodexAccountAutoSwitchThresholds),
   // An invalid optional preference must not discard providers or credential rows.
   codexAccountPriorityFailback: z.boolean().optional().catch(false),
+  codexPreserveSignedInAccount: z.boolean().optional().catch(false),
   // Absent or invalid keeps the sliding window on. Explicit false restores consecutive-only steering.
   codexFailureWindow: z.boolean().optional().catch(undefined),
   codexPinnedTransientPolicy: z.enum(["hold", "detour-new-threads"]).optional().catch("hold"),
@@ -592,6 +636,10 @@ export const configSchema = z.object({
         message: modelAdaptersError,
       });
     }
+    const credentialPinError = credentialPinnedProviderConfigError(name, provider);
+    if (credentialPinError) {
+      ctx.addIssue({ code: "custom", path: ["providers", redactSecretString(name)], message: credentialPinError });
+    }
     const preferHostedToolsError = modelPreferHostedToolsConfigError(
       (provider as { modelPreferHostedTools?: unknown }).modelPreferHostedTools,
       "modelPreferHostedTools",
@@ -680,6 +728,17 @@ export const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelReasoningSummaryDelivery"],
         message: reasoningSummaryDeliveryError,
+      });
+    }
+    const minMaxOutputError = positiveIntegerConfigError(
+      (provider as { minMaxOutputTokens?: unknown }).minMaxOutputTokens,
+      "minMaxOutputTokens",
+    );
+    if (minMaxOutputError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "minMaxOutputTokens"],
+        message: minMaxOutputError,
       });
     }
     const defaultMaxOutputError = positiveIntegerConfigError(

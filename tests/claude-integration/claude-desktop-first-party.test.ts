@@ -53,8 +53,8 @@ async function dispatch(path: string, init?: RequestInit, inputConfig: OcxConfig
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 
-// Attach the response body to every status failure so a hosted-runner flake classifies
-// itself (an environmental ca_unavailable, say, instead of a bare "Expected: 200 / Received: 500").
+// Attach the response body to status failures to preserve refusal codes and sanitized
+// secret-preparation stage/cause diagnostics alongside the expected/actual status.
 function expectStatus(result: { status: number; body: unknown }, status: number): void {
   expect(result.status, `body=${JSON.stringify(result.body)}`).toBe(status);
 }
@@ -144,6 +144,7 @@ test("first-party apply writes only the proxy env, creates the CA, and removes c
     FOO: "bar",
     HTTPS_PROXY: expectedProxyUrl(10200),
     NODE_EXTRA_CA_CERTS: applied.env.NODE_EXTRA_CA_CERTS,
+    NO_PROXY: "127.0.0.1,localhost,::1,0.0.0.0",
   });
   expect(inspectDesktopFirstParty(config()).applied).toBe(true);
   // Desktop's own library is untouched: first-party never installs a gateway profile.

@@ -11,6 +11,11 @@ That reservation occupies the shared ceiling immediately; it is not a completed 
 `comboInitialSend` hands only that child's single-use permit to `request-send-budget.ts`.
 `initialSendAllowance` includes that one prepaid send while `remainingBaseSends` keeps every
 booking spent. Other pending external bookings never become this child's free headroom.
+Generic Combo rebuilds use the same shared allowance even without an opt-in retry or spend
+policy. Their reporter settles at physical executor admission after pacing, using the exact
+prepaid recovery permit when present; unsent repairs and credential hops remain refundable.
+Anthropic pool rotations, including direct requests, reserve an `auth-recovery` hop against the
+shared allowance and may use its existing final-recovery reserve; account-count limits still apply.
 Configured transient totals subtract an owner-local counter updated by physical receipts, adapter
 observers and retry-helper reports, not shared-ledger deltas. Earlier Combo targets, later bookings
 by other owners and the child's unsent booking do not consume that total; the shared ceiling and
@@ -164,6 +169,13 @@ What stays per-scope is deliberate: the reserve, alternate-target and transition
 target's own recovery decision, while the physical-send total is what binds every target together.
 
 ## Durable spend reservations
+
+Azure's opt-in `minMaxOutputTokens` is resolved by `effectiveAzureOutputBudget` in
+`src/adapters/azure.ts` for both serialization and spend admission. Final Responses route
+normalization reserves the effective explicit output cap; Combo prepayment computes it for
+each concrete target before booking. Neither path changes the caller-owned cap or carries
+one target's floor to the next. `tests/responses/responses-spend-anchor.test.ts` checks
+both Azure aliases, direct and Combo dispatch, refusal below the floor and wire-time reservation.
 
 The request's send budget bounds how many times it may reach upstream; the spend ledger bounds
 what those sends may cost, and it is the only bound here that survives a restart. Its production
@@ -363,6 +375,17 @@ one directory entry, owned by the process user. A refusal raises `SpendLedgerFil
 content (#6314). Before this, one sentence covered five conditions and two files. A macOS sync
 daemon briefly holding a second link to a journal inside a synced folder could then only be
 diagnosed from an instrumented build. The guard is unchanged.
+Responses dispatch maps this local refusal, including nested retry causes, to HTTP 503 with
+`type: "server_error"` and `code: "spend_ledger_storage_unavailable"`. The sanitized role,
+condition and synced-folder guidance reach the client without a "Provider unreachable" prefix.
+Passthrough and compact release admission leases without recording host or account-health
+failures; translated initial/recovery dispatch uses the same mapping. runTurn preserves the code
+in buffered HTTP 503 responses and Combo preflight; an already committed SSE response carries
+it in a structured terminal error. Generic upstream 503 remains `server_is_overloaded`.
+The request log marks this as a synthetic `local-refusal`, preserves the storage code, and
+releases only admission/probe leases: existing spend debt and dispatched-send charges remain.
+Both 502 and 503 already belong to the internal transient-status and Combo-hop sets, so
+this response correction does not change those retry sets.
 `src/lib/synced-state-location.ts` is the advisory half. `acquireSpendLedgerServerLifecycle`
 warns once at startup when the state directory resolves inside iCloud Drive, a File Provider
 folder, Desktop/Documents with iCloud Desktop & Documents sync detected, or Desktop/Documents

@@ -21,6 +21,7 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
+const originalWebSocket = globalThis.WebSocket;
 const POOL_ID = "alternate-cancel-pool";
 let root: string;
 let authPath: string;
@@ -28,6 +29,11 @@ let previousCodexHome: string | undefined;
 let previousOcxHome: string | undefined;
 let releaseSpendHome: (() => void) | undefined;
 let config: OcxConfig;
+// Every upstream answer comes from the mocked fetch. Before #7418 the messages ingress also
+// dialed a real Codex WebSocket first and only reached the mock on fallback, so each case
+// waited on live DNS/TLS; under load that alone outran the 5s budget. Any dial is recorded
+// and refused, and each case asserts there were none.
+let webSocketDials: string[] = [];
 
 function quotaRefusal(): Response {
   return Response.json({ error: { code: "usage_limit_reached", message: "fixture pool quota exhausted" } }, {
@@ -93,16 +99,22 @@ beforeEach(() => {
     defaultProvider: "openai", activeCodexAccountId: POOL_ID,
     autoSwitchThreshold: 0, accountPoolStrategy: "fill-first",
     providers: { openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "pool",
-      baseUrl: "https://chatgpt.com/backend-api/codex" } },
+      baseUrl: "https://chatgpt.com/backend-api/codex", upstreamWebsocket: false } },
     codexAccounts: [{ id: POOL_ID, label: "fixture pool" }],
   } as OcxConfig;
   globalThis.fetch = (async () => { throw new Error("unexpected mocked network call"); }) as typeof fetch;
+  webSocketDials = [];
+  globalThis.WebSocket = function refusedWebSocket(url: string | URL) {
+    webSocketDials.push(String(url));
+    throw new Error("unexpected WebSocket dial");
+  } as unknown as typeof WebSocket;
 });
 
 afterEach(() => {
   releaseSpendHome?.();
   releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
+  globalThis.WebSocket = originalWebSocket;
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearAccountNeedsReauth(POOL_ID);
   clearAccountQuota();
@@ -173,8 +185,8 @@ for (const entry of ["retry helper", "messages ingress"] as const) {
           if (url.href === "https://auth.openai.com/oauth/token") {
             refreshes.push(new URLSearchParams(String(init?.body)).get("refresh_token") ?? "");
             entered.resolve();
-            // Deliberately ignore init.signal: a late endpoint result must be fenced by
-            // the credential owner even if the network operation does not stop on abort.
+            // Deliberately ignore init.signal: a late rotating grant must be saved even
+            // though caller cancellation still prevents subsequent inference.
             return release.promise;
           }
           if (url.hostname === "chatgpt.com" && url.pathname.endsWith("/responses")) {
@@ -213,9 +225,20 @@ for (const entry of ["retry helper", "messages ingress"] as const) {
             expect(after.epoch).toBe(before.epoch + 1);
             expect(after.refused).toBe(false);
           } else {
-            // One aggregate assertion reports every forbidden side effect, including
-            // terminal refusal that leaves bytes intact but poisons later requests.
-            expect({ ...credentialState(), inference }).toEqual({ ...before, inference: initialInference });
+            expect(inference).toEqual(initialInference);
+            if (scenario === "cancel-success") {
+              const after = credentialState();
+              expect(JSON.parse(after.bytes).tokens).toMatchObject({
+                access_token: "fixture-refreshed-main", refresh_token: "fixture-rotated-main",
+              });
+              expect(after.epoch).toBe(before.epoch + 1);
+              expect(after.refused).toBe(false);
+              expect(after.genericReauth).toBe(false);
+            }
+            if (scenario === "cancel-terminal") {
+              // A cancelled terminal refusal must not poison later requests.
+              expect(credentialState()).toEqual(before);
+            }
           }
         } finally {
           release.resolve(refreshReply(false));
@@ -223,6 +246,7 @@ for (const entry of ["retry helper", "messages ingress"] as const) {
           turn?.release();
           budget.dispose();
         }
+        expect(webSocketDials).toEqual([]);
       });
     }
   });

@@ -18,7 +18,7 @@ import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
 import { copyPlainData } from "../lib/plain-data";
 import type { OcxConfig } from "../types";
-import { PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
+import { IntegrationWriteSizeError, PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { inspectKiloCandidates } from "./kilo-candidates";
 import {
   fingerprint,
@@ -39,11 +39,12 @@ import {
   assertDroidPathsUnambiguous,
   isLoopbackOnly,
   resolveIntegrationPaths,
+  type ResolvedIntegrationPaths,
   restoreOwnershipCollision,
   type IntegrationClientId,
 } from "./registry";
 import { declaredIntegrationTarget } from "./target";
-import { buildIntegrationContribution, exportContextOf } from "./state";
+import { buildIntegrationContribution, exportContextOf, qoderLegacyCatalogConflict } from "./state";
 import type { IntegrationState } from "./state";
 import { serializeDocument, UnserializableValueError } from "./serialize";
 import { ClientPathError } from "../clients/config-export";
@@ -161,6 +162,15 @@ function commit(args: CommitArgs): WriteOutcome {
     }
   } catch (error) {
     if (transactionStarted) return compensate(args, error, "could not write both Cline files");
+    if (error instanceof IntegrationWriteSizeError && args.snapshotPath) {
+      try {
+        args.store.discardUncommittedSnapshot(clientId, args.entry.opId);
+      } catch (cleanupError) {
+        return refuse(clientId, "write_failed", args.state,
+          `${messageOf(error)}; could not remove the unused backup: ${messageOf(cleanupError)}`, args.snapshotPath);
+      }
+      return refuse(clientId, "write_failed", args.state, messageOf(error));
+    }
     return refuse(clientId, "write_failed", args.state, messageOf(error), args.snapshotPath);
   }
   try {
@@ -307,6 +317,10 @@ function applyOrRefreshIntegration(
           : `${clientId} now reads its providers from ${readsFrom}, whose schema opencodex does not recognise, so writing ${configPath} would change nothing it loads. ${fallback}`);
   }
   if (classified.state === "conflict") {
+    if (qoderLegacyCatalogConflict(parsed, record, contribution)) {
+      return refuse(clientId, "conflict", "conflict",
+        `${configPath} lists an opencodex model in modelConfigs.customModels that opencodex did not write; Qoder rejects the opencodex provider while that row exists, so remove or rename it first`);
+    }
     if (conflictPolicy === "refuse") {
       return refuse(clientId, "conflict", "conflict",
         classified.reason === "foreign-edit"
@@ -535,7 +549,7 @@ export function refreshIntegration(input: IntegrationWriteInput): WriteOutcome {
 export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
   const pre = preflight(input, "disable");
   if (pre.failed) return pre.failed;
-  const { store, io, clientId, spec, target, configPath, before, parsed, record, classified } = pre;
+  const { store, io, clientId, spec, target, configPath, before, parsed, record, classified, contribution } = pre;
 
   if (classified.state === "absent") {
     return { ok: true, changed: false, state: "absent", clientId, message: "not applied" };
@@ -544,7 +558,9 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
     return refuse(clientId, "conflict", "conflict",
       classified.reason === "foreign-edit"
         ? `${configPath} changed after opencodex wrote it; disabling would discard that edit`
-        : `${configPath} contains an opencodex block we did not write`);
+        : qoderLegacyCatalogConflict(parsed, record, contribution)
+          ? `${configPath} lists an opencodex model in modelConfigs.customModels that opencodex did not write; remove or rename that row, then disable again`
+          : `${configPath} contains an opencodex block we did not write`);
   }
   /*
    * `unsafe` reaches here the same way it reaches apply, and the code below
@@ -643,8 +659,15 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
   if (entry.clientId !== input.clientId) throw new Error("restore input names a different client than the operation");
 
   const clientId = entry.clientId;
-  const resolvedPath = input.resolvedPaths?.configPath
-    ?? INTEGRATION_CLIENTS[clientId].configPath(input.env, input.home);
+  let resolvedPath: string;
+  try {
+    resolvedPath = clientId === "zcode" || !input.resolvedPaths
+      ? resolveIntegrationPaths(clientId, input.env, input.home, undefined, io).configPath
+      : input.resolvedPaths.configPath;
+  } catch (error) {
+    if (!(error instanceof ClientPathError)) throw error;
+    return refuse(clientId, "unsafe", "unsafe", error.message);
+  }
   const configPath = entry.configPath;
   /*
    * Restore acts on the path the operation was journaled against. Resolving a
@@ -655,7 +678,7 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
    * shape those bytes are in, which is what the state below is measured against.
    */
   const rowTarget = declaredIntegrationTarget({
-    clientId, configPath, resolvedConfigPath: resolvedPath, env: input.env, home: input.home,
+    clientId, configPath, resolvedConfigPath: resolvedPath, env: input.env, home: input.home, io,
   });
   if (rowTarget === null) {
     return refuse(clientId, "conflict", "conflict",
@@ -806,6 +829,12 @@ export interface CoordinatedIntegrationOptions {
    * `revalidate` and any lock acquisition). A non-null result refuses without writing.
    */
   guard?: (frozen: IntegrationWriteInput) => WriteOutcome | null;
+  /**
+   * Restore's own synchronous last word, evaluated immediately before the restore transaction
+   * with no await in between. Restore deliberately ignores `guard` (the background-refresh
+   * admission hook), so a caller that must re-prove a boundary at restore time uses this one.
+   */
+  restoreGuard?: (frozen: IntegrationWriteInput) => WriteOutcome | null;
 }
 
 /** Freeze all mutable resolution seams before the first lock await. */
@@ -814,7 +843,7 @@ type FrozenIntegrationInput = IntegrationWriteInput & {
   io: IntegrationIO;
   env: NodeJS.ProcessEnv;
   home: string;
-  resolvedPaths: { configPath: string; detectDir: string };
+  resolvedPaths: ResolvedIntegrationPaths;
 };
 
 /**
@@ -854,7 +883,7 @@ function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegration
    */
   const resolvedPaths = input.resolvedPaths
     ? { ...input.resolvedPaths }
-    : resolveIntegrationPaths(input.clientId, env, home, exportContextOf({ ...input, config, models: models.value }));
+    : resolveIntegrationPaths(input.clientId, env, home, exportContextOf({ ...input, config, models: models.value }), io);
   /*
    * The configuration and the roster are seams like the others, and they were the two still held
    * by reference. A coordinated write plans from this input, awaits the writer lock and a
@@ -899,7 +928,7 @@ function storeLockFile(frozen: FrozenIntegrationInput): string | null {
   if (!declared?.lockFile) return null;
   let storePath: string;
   try {
-    storePath = declared.path(frozen.env, frozen.home);
+    storePath = declared.path(frozen.env, frozen.home, frozen.io);
   } catch (error) {
     if (error instanceof ClientPathError) return null;
     throw error;
@@ -1003,7 +1032,9 @@ export async function restoreIntegrationCoordinated(
   if (!prepared.ok) return prepared.refusal;
   const frozen = prepared.value;
   const spec = INTEGRATION_CLIENTS[frozen.clientId];
-  const run = () => restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift });
+  // Nothing awaits between restoreGuard and the restore transaction.
+  const run = () => options?.restoreGuard?.(frozen)
+    ?? restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift });
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
     return refused ?? run();

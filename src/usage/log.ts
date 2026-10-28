@@ -23,7 +23,7 @@ import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routi
 import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
-import type { CodexWsStageRecord } from "../server/responses/codex-ws-wire";
+import type { CodexWsStageRecord, CodexWsTerminalEvent } from "../server/responses/codex-ws-wire";
 import {
   ATTEMPT_RECOVERY_KIND_ROSTER,
   ATTEMPT_RECOVERY_WITHHELD_ROSTER,
@@ -581,6 +581,7 @@ function normalizeUsageValue(usage: OcxUsage | undefined): OcxUsage | undefined 
     ...(typeof usage.cachedInputTokens === "number" ? { cachedInputTokens: usage.cachedInputTokens } : {}),
     ...(typeof usage.cacheReadInputTokens === "number" ? { cacheReadInputTokens: usage.cacheReadInputTokens } : {}),
     ...(typeof usage.cacheCreationInputTokens === "number" ? { cacheCreationInputTokens: usage.cacheCreationInputTokens } : {}),
+    ...(typeof usage.cacheCreation1hInputTokens === "number" ? { cacheCreation1hInputTokens: usage.cacheCreation1hInputTokens } : {}),
     ...(typeof usage.reasoningOutputTokens === "number" ? { reasoningOutputTokens: usage.reasoningOutputTokens } : {}),
     ...(isNonNegativeFiniteNumber(usage.providerCredits) ? { providerCredits: usage.providerCredits } : {}),
     ...(usage.estimated ? { estimated: true } : {}),
@@ -625,6 +626,7 @@ function normalizeAttemptUsage(raw: unknown): OcxUsage | null {
     "cachedInputTokens",
     "cacheReadInputTokens",
     "cacheCreationInputTokens",
+    "cacheCreation1hInputTokens",
     "reasoningOutputTokens",
     "providerCredits",
   ] as const) {
@@ -805,6 +807,15 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
  * injected free-form field — drops the whole record rather than passing
  * attacker text into the DTO.
  */
+// Total over the terminal union by `satisfies`; a type-only import keeps the WS transport out of
+// this module's runtime graph.
+const CODEX_WS_TERMINAL_EVENT_NAMES = {
+  "response.completed": true,
+  "response.failed": true,
+  "response.incomplete": true,
+  error: true,
+} as const satisfies Record<CodexWsTerminalEvent, true>;
+
 function normalizeCodexWsStageRecord(value: unknown): CodexWsStageRecord | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const stage = value as Record<string, unknown>;
@@ -839,6 +850,15 @@ function normalizeCodexWsStageRecord(value: unknown): CodexWsStageRecord | undef
     reused: stage.reused,
     ocxVersion: stage.ocxVersion,
     bunVersion: stage.bunVersion,
+    // #6740 fields are newer than the record: absent or malformed values read as unobserved
+    // rather than costing the row the rest of its stage evidence.
+    terminalEvent: typeof stage.terminalEvent === "string" && Object.hasOwn(CODEX_WS_TERMINAL_EVENT_NAMES, stage.terminalEvent)
+      ? stage.terminalEvent as CodexWsTerminalEvent
+      : null,
+    terminalErrorStatus: typeof stage.terminalErrorStatus === "number" && Number.isInteger(stage.terminalErrorStatus)
+      && stage.terminalErrorStatus >= 100 && stage.terminalErrorStatus <= 599
+      ? stage.terminalErrorStatus
+      : null,
   };
 }
 
@@ -1166,8 +1186,12 @@ export function appendUsageEntry(entry: PersistedUsageEntry): void {
 
 export type UsageLogRevision = {
   path: string;
-  dev: number;
-  ino: number;
+  /**
+   * Exact decimal device and file id. NTFS file ids carry a sequence number in their
+   * high bits and routinely exceed 2^53, so a Number would let two files compare equal.
+   */
+  dev: string;
+  ino: string;
   birthtimeMs: number;
   size: number;
   mtimeMs: number;
@@ -1370,12 +1394,17 @@ function readExactly(fd: number, length: number, position: number): Buffer | nul
   return output;
 }
 
-function usageLogRevision(path: string, stat: ReturnType<typeof fstatSync>): UsageLogRevision {
+/** Exact dev/ino of an open file, read through bigint stats so large ids keep every bit. */
+export function exactFileIdentity(fd: number): { dev: string; ino: string } {
+  const exact = fstatSync(fd, { bigint: true });
+  return { dev: exact.dev.toString(), ino: exact.ino.toString() };
+}
+
+function usageLogRevision(path: string, fd: number, stat: ReturnType<typeof fstatSync>): UsageLogRevision {
   if (!stat.isFile()) throw new Error("usage log is not a regular file");
   return {
     path,
-    dev: Number(stat.dev),
-    ino: Number(stat.ino),
+    ...exactFileIdentity(fd),
     birthtimeMs: Number(stat.birthtimeMs),
     size: Number(stat.size),
     mtimeMs: Number(stat.mtimeMs),
@@ -1408,7 +1437,7 @@ export function currentUsageLogRevision(): UsageLogRevision | null {
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");
-    return usageLogRevision(path, fstatSync(fd));
+    return usageLogRevision(path, fd, fstatSync(fd));
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
@@ -1533,7 +1562,7 @@ async function readUsageEntriesFullCooperatively(
     if (prefixDigest === null) throw new Error("usage log changed while it was being read");
     return {
       entries: parsed.entries,
-      revision: usageLogRevision(path, stat),
+      revision: usageLogRevision(path, fd, stat),
       truncatedPrefixBytes,
       entriesTruncated: parsed.entriesDropped > 0,
       entriesDropped: parsed.entriesDropped,
@@ -1565,7 +1594,7 @@ async function readUsageEntriesIncrementally(
   try {
     fd = openSync(path, "r");
     const stat = fstatSync(fd);
-    const revision = usageLogRevision(path, stat);
+    const revision = usageLogRevision(path, fd, stat);
     if (usageLogIdentityKey(revision) !== retained.identityKey) return null;
     const size = Number(stat.size);
     // A shrink means truncation or replacement-in-place; the retained rows may no

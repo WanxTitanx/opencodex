@@ -35,6 +35,7 @@ import {
 import { resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
 import type { DataPlaneAdmission } from "../auth-cors";
 import { modelCapabilityFields } from "../models-capabilities";
+import { modelAliasIdPromoter } from "./model-alias-id";
 import { expandCursorEffortRow, knownEffortRowIds } from "../effort-row";
 import { catalogFastRowEligible, expandFastRow } from "../fast-row";
 import { detectCursorInstalls } from "../../integrations/cursor-detect";
@@ -354,6 +355,7 @@ export async function buildPublicModelRows(
       effortRowKnownIds,
     ));
   };
+  const promoteAliasId = modelAliasIdPromoter(config);
   const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered)
     .filter(m => listAllows(m.provider, m.id))
     .map(async m => {
@@ -371,8 +373,11 @@ export async function buildPublicModelRows(
           knownModelIdsForProvider(m.provider, provider, config),
         ).get(m.id)
       : undefined;
+    const effectiveId = !isCombo && !fastModelId && effective
+      ? promoteAliasId(m.provider, m.id, effective.alias, catalogRowFastEligible(m)) ?? publicId
+      : publicId;
     const row = {
-      id: publicId,
+      id: effectiveId,
       object: "model",
       created: 0,
       // This endpoint is an OpenAI-compatible inbound contract. Some clients use
@@ -381,11 +386,15 @@ export async function buildPublicModelRows(
       owned_by: isCombo ? "openai" : (m.owned_by ?? m.provider),
       ...(isCombo ? { is_combo: true } : {}),
       ...(effective ? { alias_of: `${provider?.alias || m.provider}/${effective.alias}` } : {}),
+      // When preferModelAliasIds promotes the alias to `id`, retain the original
+      // provider/nativeId so clients that need the upstream identity can read it.
+      ...(effectiveId !== publicId ? { native_id: publicId } : {}),
       ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
       ...modelCapabilityFields({
+        supportsReasoning: m.supportsReasoning, supportsReasoningEffort: m.supportsReasoningEffort,
+        supportsThinkingToggle: m.supportsThinkingToggle, defaultThinkingEnabled: m.defaultThinkingEnabled,
         reasoningEfforts: m.reasoningEfforts,
-        // contextWindow is already the post-cap effective value; contextCap is the raw
-        // operator knob and over-reports models whose real window sits below it.
+        // Use the post-cap window; the raw contextCap can exceed a model's real window.
         contextWindow: m.contextWindow,
         maxOutputTokens: m.maxOutputTokens,
         inputModalities: m.inputModalities,

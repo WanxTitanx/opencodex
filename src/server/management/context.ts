@@ -45,6 +45,10 @@ export interface ManagementRequestIngress {
 }
 
 export interface ManagementApiDeps {
+  desktopStartupSettings?: import("../../codex/desktop-compatibility/startup-settings").DesktopStartupSettingsService;
+  desktopCertificateService?: import("../../codex/desktop-compatibility/certificate-service").DesktopCertificateService;
+  desktopCompatibilityRuntime?: import("../../codex/desktop-compatibility/runtime").DesktopCompatibilityRuntime;
+  onDesktopCompatibilityShutdown?: (shutdown: () => Promise<void>) => void;
   /** Bound to this server's lifecycle owner; absent in direct route tests. */
   listLowQuotaEvents?: (limit?: number) => LowQuotaEvent[];
   /** Bound Claude intercept state, injectable for isolated management-route tests. */
@@ -152,7 +156,7 @@ export interface ManagementApiDeps {
   codexPromptPaths?: CodexPromptPaths;
   /** Link seams are getters so the optional listener and supervisor are singletons. */
   linkSupervisor?: () => LinkSupervisor;
-  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog"> & Partial<Pick<import("../index/optional-listeners").OptionalListenerSet<unknown>, "ensureClaudeIntercept" | "claudeInterceptOutcome">>;
+  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog"> & Partial<Pick<LinkListenerLifecycle<unknown>, "peerObservation">> & Partial<Pick<import("../index/optional-listeners").OptionalListenerSet<unknown>, "ensureClaudeIntercept" | "claudeInterceptOutcome">>;
   readLinkStore?: () => LinkStore;
   writeLinkStore?: (store: LinkStore) => void;
   linkKnownHostsPath?: () => string;

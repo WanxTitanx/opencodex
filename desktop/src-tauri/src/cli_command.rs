@@ -263,6 +263,16 @@ fn perform_in(
             issues.push(e);
         }
     }
+    #[cfg(windows)]
+    if !remove && r.enabled {
+        if let Some(owned) = &r.windows {
+            match windows::machine_conflict(&owned.entry) {
+                Ok(true) => issues.push("machine-path-conflict".into()),
+                Ok(false) => {}
+                Err(e) => issues.push(e),
+            }
+        }
+    }
     let configured = r.enabled
         && r.bundle.is_some()
         && (r.posix.is_some() || r.windows.is_some())
@@ -444,18 +454,20 @@ mod tests {
     }
     fn selected_observation_case(case: &str) {
         let t = Temp::new();
-        let result = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "cli_command::tests::selected_observation_child",
-                "--nocapture",
-            ])
-            .env("OCX_CLI_OBSERVATION_TEST", case)
-            .env("HOME", &t.0)
-            .env("ZDOTDIR", &t.0)
-            .env("XDG_CONFIG_HOME", t.0.join(".config"))
-            .output()
-            .unwrap();
+        let result = crate::process_spawn::with_spawn(|| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "cli_command::tests::selected_observation_child",
+                    "--nocapture",
+                ])
+                .env("OCX_CLI_OBSERVATION_TEST", case)
+                .env("HOME", &t.0)
+                .env("ZDOTDIR", &t.0)
+                .env("XDG_CONFIG_HOME", t.0.join(".config"))
+                .output()
+        })
+        .unwrap();
         assert!(result.status.success(), "selected-observation-failed");
         assert!(
             String::from_utf8_lossy(&result.stdout).contains("1 passed"),
@@ -568,16 +580,18 @@ mod tests {
         }
     }
     fn disabled_selector_case(action: &str) {
-        let result = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "cli_command::tests::disabled_selector_child",
-                "--nocapture",
-            ])
-            .env("OCX_CLI_SELECTOR_TEST", action)
-            .env("ZDOTDIR", "/invalid:zdotdir")
-            .output()
-            .unwrap();
+        let result = crate::process_spawn::with_spawn(|| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "cli_command::tests::disabled_selector_child",
+                    "--nocapture",
+                ])
+                .env("OCX_CLI_SELECTOR_TEST", action)
+                .env("ZDOTDIR", "/invalid:zdotdir")
+                .output()
+        })
+        .unwrap();
         assert!(result.status.success(), "disabled-selector-failed");
         assert!(
             String::from_utf8_lossy(&result.stdout).contains("1 passed"),

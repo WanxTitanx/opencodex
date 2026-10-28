@@ -32,14 +32,15 @@ import {
   assertDroidRecordedSettingsUnambiguous,
   isLoopbackOnly,
   resolveIntegrationPaths,
+  type ResolvedIntegrationPaths,
   restoreOwnershipCollision,
   type IntegrationClientId,
 } from "./registry";
 import { declaredIntegrationTarget, resolveIntegrationTarget, type IneffectiveWrite, type IneffectiveWriteReason, type IntegrationTarget } from "./target";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
-import { buildIntegrationContribution, classifyIntegration, exportContextOf, readPath, type IntegrationState, type StateReason } from "./state";
+import { buildIntegrationContribution, classifyIntegration, exportContextOf, qoderLegacyCatalogConflict, readPath, type IntegrationState, type StateReason } from "./state";
 import { inspectKiloCandidates } from "./kilo-candidates";
-import { InvalidSelectorError } from "./merge";
+import { InvalidSelectorError, UnrepresentableSelectorError } from "./merge";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
 import type { OcxConfig } from "../types";
 import { matchesOperationResult, type JournalEntry } from "./journal";
@@ -130,8 +131,13 @@ export const DYNAMIC_SEGMENT = "*";
  * paths silently have no declaration.
  */
 const CLIENT_MANAGED_PATHS = {
+  qoder: [["providers", OPENCODE_PROVIDER_ID], ["modelConfigs", "customModels", DYNAMIC_SEGMENT]],
+  "qoder-cn": [["providers", OPENCODE_PROVIDER_ID], ["modelConfigs", "customModels", DYNAMIC_SEGMENT]],
+  workbuddy: [["models", DYNAMIC_SEGMENT], [DYNAMIC_SEGMENT]],
+  "workbuddy-ai": [["models", DYNAMIC_SEGMENT], [DYNAMIC_SEGMENT]],
   opencode: [["provider", OPENCODE_PROVIDER_ID], ["providers", OPENCODE_PROVIDER_ID]],
   pi: [["providers", OPENCODE_PROVIDER_ID]],
+  "gentle-shell": [["providers", OPENCODE_PROVIDER_ID]],
   omp: [["providers", OPENCODE_PROVIDER_ID]],
   hermes: [["providers", OPENCODE_PROVIDER_ID]],
   openclaw: [["models", "providers", OPENCODE_PROVIDER_ID]],
@@ -375,7 +381,9 @@ function applyOutcome(input: PlanInput): PlanOutcome {
    */
   if (input.ineffectiveWrite !== null) return deny("superseded_store");
   // Overwrite exists precisely to proceed through a conflict the operator has been shown.
-  if (input.classified.state === "conflict" && input.operation !== "overwrite") return deny("conflict");
+  // A Qoder legacy-catalog collision is not on a path overwrite replaces, so it still refuses.
+  if (input.classified.state === "conflict" && (input.operation !== "overwrite"
+    || qoderLegacyCatalogConflict(input.parsed, input.record, input.contribution))) return deny("conflict");
   if (input.classified.state === "unsafe") return deny("unsafe");
   if (input.classified.state === "current") return NOOP;
   return CHANGE;
@@ -567,7 +575,7 @@ export function restoreStoreDirectoryRefusal(
   if (!declared?.lockFile) return null;
   let storePath: string;
   try {
-    storePath = declared.path(input.env, input.home);
+    storePath = declared.path(input.env, input.home, io);
   } catch (error) {
     if (error instanceof ClientPathError) return null;
     throw error;
@@ -602,10 +610,11 @@ export function observeRestore(
   const store = selectedOperation?.store ?? input.store ?? createIntegrationStateStore();
   let io = input.io ?? defaultIntegrationIO(store);
   const clientId = input.clientId;
-  let resolved: { configPath: string; detectDir: string };
+  let resolved: ResolvedIntegrationPaths;
   try {
     const context = exportContextOf(input);
-    resolved = input.resolvedPaths ?? resolveIntegrationPaths(clientId, input.env, input.home, context);
+    resolved = clientId === "zcode" || !input.resolvedPaths
+      ? resolveIntegrationPaths(clientId, input.env, input.home, context, io) : input.resolvedPaths;
     if (clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(resolved.detectDir, context);
   } catch (error) {
     if (!(error instanceof ClientPathError)) throw error;
@@ -630,7 +639,7 @@ export function observeRestore(
    * config file. The answer also carries the document shape those bytes are in.
    */
   const rowTarget = declaredIntegrationTarget({
-    clientId, configPath, resolvedConfigPath: resolved.configPath, env: input.env, home: input.home,
+    clientId, configPath, resolvedConfigPath: resolved.configPath, env: input.env, home: input.home, io,
   });
   if (rowTarget === null) {
     return {
@@ -848,7 +857,7 @@ export interface IntegrationWriteInput {
   store?: IntegrationStateStore;
   io?: IntegrationIO;
   /** Frozen once by the async coordinator; synchronous callers may omit it. */
-  resolvedPaths?: { configPath: string; detectDir: string };
+  resolvedPaths?: ResolvedIntegrationPaths;
 }
 
 /** A refusal in the planner's own vocabulary, so observation does not depend on the writer's result type. */
@@ -922,7 +931,8 @@ export function observeIntegration(
      * verify account 1 was installed and then write account 0's catalog.
      */
     const context = exportContextOf(input);
-    const resolved = input.resolvedPaths ?? resolveIntegrationPaths(clientId, input.env, input.home, context);
+    const resolved = clientId === "zcode" || !input.resolvedPaths
+      ? resolveIntegrationPaths(clientId, input.env, input.home, context, io) : input.resolvedPaths;
     if (clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(resolved.detectDir, context);
     detectDir = resolved.detectDir;
     if (clientId === "cline") io = createClineIO(io, resolved.configPath, store, effects.recover);
@@ -945,9 +955,12 @@ export function observeIntegration(
      * collection route.
      */
     effective = resolveIntegrationTarget({
-      clientId, configPath: recordedPath, io, record: stored, env: input.env, home: input.home,
+      clientId, configPath: recordedPath, io, record: stored, env: input.env, home: input.home, resolvedPaths: resolved,
     });
     configPath = effective.configPath;
+    if (effective.pathError && operation !== "disable") {
+      return { failed: observationFailure("unsafe", "unsafe", effective.pathError) } as const;
+    }
   } catch (error) {
     if (error instanceof ClineTransactionError) {
       return { failed: { ...observationFailure("unsafe", "unsafe", error.message, error.snapshotPath), residual: true } } as const;
@@ -994,7 +1007,17 @@ export function observeIntegration(
   const record = stored && stored.clientId === clientId && stored.configPath === configPath
     ? stored
     : null;
-  const contribution = buildIntegrationContribution(input, effective, parsed, record);
+  if (operation !== "disable") {
+    const refusal = exportSpec.validateApply?.({ ...exportContextOf(input), document: parsed });
+    if (refusal) return { failed: observationFailure("unsafe", "unsafe", refusal) } as const;
+  }
+  let contribution: ManagedContribution;
+  try {
+    contribution = buildIntegrationContribution(input, effective, parsed, record);
+  } catch (error) {
+    if (!(error instanceof UnrepresentableSelectorError)) throw error;
+    return { failed: observationFailure("unsafe", "unsafe", error.message) } as const;
+  }
   if (clientId === "droid" && input.models.length > 0 && contribution.fragments.length === 0 && !record) {
     return { failed: observationFailure("unsafe", "unsafe", "Factory Droid has no addressable models in the selected catalog") } as const;
   }
